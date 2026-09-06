@@ -1,6 +1,6 @@
 {
   "downloadBaseUrl": "https://drive.google.com/uc?export=download&id=",
-  "generatedAt": "2026-09-06T13:40:06.450874+00:00",
+  "generatedAt": "2026-09-06T14:27:02.330999+00:00",
   "provider": "google_drive",
   "schema": 1,
   "sentence": {
@@ -254,7 +254,7 @@
     "0248_mi_sxatas_la_bengalan": "1txpqRTKeRoC_IuouCQfosxE5wvuqXaZP",
     "0249_mi_parolas_la_rumanan": "1vilVMEynDuIQWzX5pnaL2vm_dHEjYYjg",
     "0250_cxu_sxi_parolas_la_tajan": "1Ls_cEifoEj2UtRSHOAXrySt00OVbE21o",
-    "0251_mi_lernas_la_urduon": "1xWkAWFrfeQtkoqpWFU2q-quuw6oHcmdM",
+    "0251_mi_lernas_urduon": "1PQ7m-l-dEOrRLlvixUOFuCvGClwQgUez",
     "0252_mi_parolas_du_lingvojn": "1PmWaXdolC_DeyDlq_XhuAXZt-9t0ukDK",
     "0253_mi_ne_parolas_la_hispanan": "1r307RH-4mTNld5uCEYT82mOXX1IZSCuO",
     "0254_gxi_estas_facila_lingvo": "19cnL3BpUa-nK9mGFEdrvyLVV3dmn1OQp",
@@ -2363,7 +2363,7 @@
     "2357_ni_nun_alproksimigxas_al_la_stacidomo_london_kings_cross": "1s4KHk1U1T6pKGpFg4UmyvOU3vuIWC3Rc",
     "2358_bonvolu_kunpreni_vian_tutan_bagagxon_kaj_viajn_personajn_ajxojn": "1Vh8hBPIYD8KPJuAkgrgxIbIvlIgEd62Z",
     "2359_pardonu_cxi_tio_ne_estas_via_kupeo": "1pnvtHMTyl7Hi_qhDN3Dph9XJK_A25FDn",
-    "2360_cxu_la_restoracia_vagono_estas_antauxe_aux_malantauxe_de_la_trajno": "1OGkJ7vB6e5L70rqNjDchgrG8beySBARt",
+    "2360_cxu_la_restoracia_vagono_estas_antauxe_aux_malantauxe_en_la_trajno": "1kbxCZY6sbbIGLj0_TuQIZS_a-0ndMMrj",
     "2361_bonvolu_veki_min_unu_horon_antaux_ol_ni_alvenos": "1zuVDisJ-MGgmycN5-YJ34xiQEOetQm-O",
     "2362_kiom_longe_la_trajno_haltas_cxi_tie": "1JbC1I0aLDwaBEIySF-h_JFfD1AfmNBRm",
     "2363_cxu_vi_iam_preterveturis_vian_haltejon_en_trajno": "1mK6IonUFFuALH-UzcaPS0jMF9w7WwZm1",
@@ -5007,8 +5007,10 @@
   },
   "sources": {
     "sentence": {
-      "driveFileCount": 5002,
+      "driveFileCount": 5004,
       "extraDriveKeys": [
+        "0251_mi_lernas_la_urduon",
+        "2360_cxu_la_restoracia_vagono_estas_antauxe_aux_malantauxe_de_la_trajno",
         "2587_mi_bezonas_gxin_gxis_la_kvina",
         "4460_mi_pensas_ke_mi_strecxis_muskolon_en_mia_kruro"
       ],

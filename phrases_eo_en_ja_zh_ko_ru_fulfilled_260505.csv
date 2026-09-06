@@ -249,7 +249,7 @@
 403,2,Beginner 2,General Conversation,Languages,Mi ŝatas la bengalan,I like Bengali.,ベンガル語が好きです。,我喜欢孟加拉语。,저는 벵골어를 좋아해요.,Мне нравится бенгальский.
 404,2,Beginner 2,General Conversation,Languages,Mi parolas la rumanan,I speak Romanian.,私はルーマニア語を話します。,我会说罗马尼亚语。,저는 루마니아어를 할 수 있어요.,Я говорю по-румынски.
 405,2,Beginner 2,General Conversation,Languages,Ĉu ŝi parolas la tajan?,Does she speak Thai?,彼女はタイ語を話せますか？,她会说泰语吗？,그녀는 태국어를 할 수 있나요?,Она говорит по-тайски?
-406,2,Beginner 2,General Conversation,Languages,Mi lernas la urduon,I'm learning Urdu.,ウルドゥー語を勉強しています。,我正在学习乌尔都语。,저는 우르두어를 배우고 있어요.,Я учу урду.
+406,2,Beginner 2,General Conversation,Languages,Mi lernas urduon,I'm learning Urdu.,ウルドゥー語を勉強しています。,我正在学习乌尔都语。,저는 우르두어를 배우고 있어요.,Я учу урду.
 407,4,Intermediate 2,General Conversation,Languages,Mi parolas du lingvojn,I speak two languages.,私は二か国語を話します。,我会说两种语言。,저는 두 가지 언어를 할 수 있어요.,Я говорю на двух языках.
 408,4,Intermediate 2,General Conversation,Languages,Mi ne parolas la hispanan,I don't speak Spanish.,スペイン語は話せません。,我不会说西班牙语。,저는 스페인어를 하지 못해요.,Я не говорю по-испански.
 409,4,Intermediate 2,General Conversation,Languages,Ĝi estas facila lingvo,It's an easy language.,簡単な言語です。,这是一门简单的语言。,쉬운 언어예요.,Это простой язык.
@@ -2358,7 +2358,7 @@
 2512,9,Expert 1,Other Transport,On the Bus or Train,Ni nun alproksimiĝas al la stacidomo London Kings Cross,We are now approaching London Kings Cross.,まもなくロンドン・キングス・クロス駅に到着いたします。,我们即将到达伦敦国王十字车站。,이제 곧 런던 킹스 크로스역에 도착합니다.,Мы прибываем на вокзал Лондон Кингс-Кросс.
 2513,10,Expert 2,Other Transport,On the Bus or Train,Bonvolu kunpreni vian tutan bagaĝon kaj viajn personajn aĵojn,Please take all your luggage and personal belongings with you.,お荷物やお手回り品をすべてお持ちください。,请带好您的所有行李和个人物品。,모든 짐과 개인 소지품을 꼭 챙기시기 바랍니다.,"Пожалуйста, не забывайте багаж и личные вещи."
 2514,9,Expert 1,Other Transport,On the Bus or Train,"Pardonu, ĉi tio ne estas via kupeo","Excuse me, this is not your compartment.",すみません、こちらはあなたのコンパートメントではありません。,不好意思，这不是你的包厢。,"실례합니다만, 여기는 손님 객실이 아닌 것 같습니다.","Извините, это не ваше купе."
-2515,10,Expert 2,Other Transport,On the Bus or Train,Ĉu la restoracia vagono estas antaŭe aŭ malantaŭe de la trajno?,Is the restaurant car at the front or rear of the train?,食堂車は列車の前方ですか、それとも後方ですか？,餐车在列车的前面还是后面？,"식당칸은 열차의 앞쪽에 있나요, 아니면 뒤쪽에 있나요?",Вагон-ресторан в голове или в хвосте поезда?
+2515,10,Expert 2,Other Transport,On the Bus or Train,Ĉu la restoracia vagono estas antaŭe aŭ malantaŭe en la trajno?,Is the restaurant car at the front or rear of the train?,食堂車は列車の前方ですか、それとも後方ですか？,餐车在列车的前面还是后面？,"식당칸은 열차의 앞쪽에 있나요, 아니면 뒤쪽에 있나요?",Вагон-ресторан в голове или в хвосте поезда?
 2516,9,Expert 1,Other Transport,On the Bus or Train,Bonvolu veki min unu horon antaŭ ol ni alvenos,Please wake me an hour before we arrive.,到着の1時間前に起こしてください。,请在我们到达前一小时叫醒我。,도착하기 한 시간 전에 저를 깨워 주세요.,"Пожалуйста, разбудите меня за час до прибытия."
 2517,10,Expert 2,Other Transport,On the Bus or Train,Kiom longe la trajno haltas ĉi tie?,How long does the train stop here?,この駅にはどのくらい停車しますか？,火车在这里停多久？,기차가 여기에서 얼마나 정차하나요?,Сколько времени поезд здесь стоит?
 2518,10,Expert 2,Other Transport,On the Bus or Train,Ĉu vi iam preterveturis vian haltejon en trajno?,Have you ever missed your train stop?,電車で降りる駅を乗り過ごしたことはありますか？,你有没有错过下车的站点？,기차에서 내릴 역을 지나친 적이 있나요?,Ты когда-нибудь проезжал свою станцию на поезде?
@@ -4792,7 +4792,7 @@
 4946,7,Advanced 2,Communication Means,At the Post Office,Poŝtmarkon por ĉi tiu poŝtkarto al Aŭstralio,A stamp for this postcard to Australia.,このハガキをオーストラリアに送るための切手をお願いします。,这张明信片寄往澳大利亚，请给我一张邮票。,이 엽서를 호주로 보내기 위한 우표 주세요.,Марку для открытки в Австралию.
 4947,8,Advanced 3,Communication Means,At the Post Office,Kiom kostas la poŝtmarkoj por ĉi tiuj leteroj?,How much do the stamps for these letters cost?,これらの手紙の切手代はいくらですか？,这些信的邮票要多少钱？,이 편지들의 우표는 얼마인가요?,Сколько стоят марки для этих писем?
 4948,9,Expert 1,Communication Means,At the Post Office,Kiom kostas la afranko al Hongkongo?,How much is the postage to Hong Kong?,香港までの送料はいくらですか。,寄到香港的邮费是多少？,홍콩까지의 우편 요금이 얼마인가요?,Сколько стоит отправить письмо в Гонконг?
-4949,10,Expert 2,Communication Means,At the Post Office,"Ĉu mi povus havi libreton da unuaklasaj poŝtmarkoj, mi petas?","Could I have a book of first class stamps, please?",一等郵便の切手を1シートいただけますか。,请给我一本一等邮票。,일등 우표 한 권 주세요.,"Можно мне книжечку марок первого класса, пожалуйста?"
+4949,10,Expert 2,Communication Means,At the Post Office,"Ĉu mi povus havi libreton da unuaklasaj poŝtmarkoj, mi petas?","Could I have a book of first class stamps, please?",一等郵便の切手帳を1冊いただけますか。,请给我一本一等邮票。,일등 우표 한 권 주세요.,"Можно мне книжечку марок первого класса, пожалуйста?"
 4950,10,Expert 2,Communication Means,At the Post Office,Kiom kostas duaklasa poŝtmarko?,How much is a second class stamp?,2等郵便切手はいくらですか？,二等邮票多少钱？,이등 우표는 얼마인가요?,Сколько стоит марка второго класса?
 4951,7,Advanced 2,Communication Means,At the Post Office,"Mi ŝatus pakon da kovertoj, mi petas","I'd like a packet of envelopes, please.",封筒を一袋お願いします。,请给我一包信封。,봉투 한 묶음 주세요.,"Я бы хотела упаковку конвертов, пожалуйста."
 4952,8,Advanced 3,Communication Means,At the Post Office,Bonvolu enmeti ĉi tiun poŝtkarton en la poŝtkeston,"Drop this postcard in the postbox, please.",このはがきをポストに入れてください。,请把这张明信片投进邮筒。,이 엽서를 우체통에 넣어 주세요.,"Опустите эту открытку в почтовый ящик, пожалуйста."
