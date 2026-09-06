@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Local Cloud iframe fixture</title>
+    <style>
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      #cloudApp { display: block; width: 100%; height: 100dvh; border: 0; }
+    </style>
+  </head>
+  <body>
+    <p id="fixtureError" hidden></p>
+    <script>
+      // Model Cloud's viewport-constrained, cross-origin outer frame. The real
+      // Streamlit app still owns its component iframe and all request handlers.
+      try {
+        const app = new URL(new URLSearchParams(location.search).get("app"));
+        if (app.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(app.hostname)
+            || app.username || app.password) throw new Error("Only local fixture URLs are allowed.");
+        const iframe = document.createElement("iframe");
+        iframe.id = "cloudApp";
+        iframe.title = "Local Streamlit Cloud host";
+        iframe.setAttribute("scrolling", "no");
+        iframe.src = app.href;
+        document.body.append(iframe);
+      } catch (error) {
+        const message = document.querySelector("#fixtureError");
+        message.hidden = false;
+        message.textContent = error.message;
+      }
+    </script>
+  </body>
+</html>
