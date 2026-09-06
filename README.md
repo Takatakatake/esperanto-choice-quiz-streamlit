@@ -74,7 +74,7 @@ JavaScript・CSSなど画面だけを変更した場合は、データを再生�
 npm run version:mobile -- 2026-09-06-unified-learning
 ```
 
-どちらの場合も、PWAに更新を届けるため `mobile-sw.js` の `CACHE_VERSION` を新しい値に変更します。上記コマンドが更新するのは `APP_VERSION` です。
+どちらのコマンドも、診断画面の `APP_VERSION`、CSSのURLに付ける版番号、PWAの `CACHE_VERSION` と事前保存するCSSのURLをまとめて更新します。画面を変更した際は新しい版番号を指定し、通常の再読み込みでも古いCSSが残らないようにします。
 
 JSONは `translations.ja` / `translations.zh` / `translations.ko` を含み、対象言語で同じ表示になる誤答選択肢を避けます。音声キャッシュは上限を設け、古いものから整理します。
 
