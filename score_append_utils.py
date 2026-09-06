@@ -80,6 +80,7 @@ def _open_worksheet(worksheet_name: str, *, refresh: bool = False) -> tuple[Opti
 
     try:
         client = gspread.service_account_from_dict(creds)
+        client.set_timeout((5, 20))
         if target.startswith("http://") or target.startswith("https://"):
             ss = client.open_by_url(target)
         else:
@@ -293,14 +294,20 @@ def append_score_row_safe(
     return bool(last_result)
 
 
-def load_sheet_records(worksheet_name: str, *, refresh: bool = False) -> Optional[list[Dict]]:
+def load_sheet_records(
+    worksheet_name: str, *, refresh: bool = False, required_headers=()
+) -> Optional[list[Dict]]:
     ws, cache_key = _open_worksheet(worksheet_name, refresh=refresh)
     if ws is None:
         return None
     try:
         values = _read_sheet_values(ws)
+        headers = [str(h).strip() for h in values[0]] if values else []
+        if any(headers.count(header) != 1 for header in required_headers):
+            _invalidate_cache(cache_key)
+            return None
         if refresh and cache_key:
-            _HEADER_CACHE[cache_key] = [str(h).strip() for h in values[0]] if values else []
+            _HEADER_CACHE[cache_key] = headers
         return _read_records_from_values(values)
     except Exception:
         _invalidate_cache(cache_key)

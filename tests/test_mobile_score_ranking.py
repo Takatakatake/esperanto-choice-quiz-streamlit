@@ -78,6 +78,11 @@ class MobileScoreSyncTests(unittest.TestCase):
 
 
 class MobileRankingTests(unittest.TestCase):
+    def setUp(self):
+        visibility_patch = patch.object(mobile_ranking, "load_ranking_visibility", return_value={})
+        self.visibility = visibility_patch.start()
+        self.addCleanup(visibility_patch.stop)
+
     def test_score_log_totals_deduplicates_save_id_and_uses_jst_dates(self):
         rows = [
             {"user": "A", "points": "10", "ts": "2026-05-12T15:30:00Z", "save_id": "same"},
@@ -131,6 +136,7 @@ class MobileRankingTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["requestId"], "rank-1")
+        self.assertEqual(result["user"], "B")
         self.assertEqual(result["source"], "live")
         self.assertEqual(result["rankings"]["overall"][0]["user"], "A")
         self.assertEqual(result["own"]["overall"]["user"], "B")
@@ -146,8 +152,57 @@ class MobileRankingTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["requestId"], "rank-error")
-        self.assertIn("Secrets", result["message"])
+        self.assertIn("再読み込み", result["message"])
         self.assertGreaterEqual(load_sheet_records.call_count, 2)
+
+    @patch.object(mobile_ranking, "load_sheet_records")
+    def test_private_current_user_is_excluded_from_every_public_list(self, load_sheet_records):
+        self.visibility.return_value = {"Private": False, "Public": True}
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        load_sheet_records.side_effect = [
+            [{"user": "Private", "total_points": 3_000_000}, {"user": "Public", "total_points": 2_000_000}],
+            [
+                {"user": "Private", "points": 3_000_000, "ts": now},
+                {"user": "Public", "points": 2_000_000, "ts": now},
+                {"user": "NoPreference", "points": 1_000_000, "ts": now},
+            ],
+        ]
+        result = mobile_ranking.load_mobile_rankings_request({"type": "load_rankings", "user": "Private"})
+        self.assertTrue(result["ok"])
+        for period in ("overall", "today", "month", "hof"):
+            self.assertEqual([row["user"] for row in result["rankings"][period]], ["Public", "NoPreference"])
+            self.assertEqual([row["rank"] for row in result["rankings"][period]], [1, 2])
+            self.assertIsNone(result["own"][period])
+
+    @patch.object(mobile_ranking, "load_sheet_records")
+    def test_unavailable_preferences_do_not_publish_any_cached_or_fallback_ranking(self, load_sheet_records):
+        self.visibility.return_value = None
+        result = mobile_ranking.load_mobile_rankings_request({"type": "load_rankings", "user": "Private"})
+        self.assertFalse(result["ok"])
+        self.assertTrue(all(rows == [] for rows in result["rankings"].values()))
+        self.assertEqual(result["own"], {})
+        self.assertIn("公開設定", result["message"])
+        load_sheet_records.assert_not_called()
+
+    @patch.object(mobile_ranking, "load_sheet_records")
+    def test_private_users_stay_hidden_in_stats_only_fallback(self, load_sheet_records):
+        self.visibility.return_value = {"Private": False}
+        load_sheet_records.side_effect = [[{"user": "Private", "total_points": 100}], None]
+        result = mobile_ranking.load_mobile_rankings_request({"type": "load_rankings", "user": "Private"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source"], "stats_only")
+        self.assertEqual(result["rankings"]["overall"], [])
+
+
+class LearningRecordWordingTests(unittest.TestCase):
+    @patch.object(mobile_score_sync, "_update_totals", return_value=(True, True))
+    @patch.object(mobile_score_sync, "_append_score", return_value=True)
+    def test_saved_record_message_is_independent_of_public_ranking(self, append_score, update_totals):
+        for lang, expected in (("ja", "学習記録"), ("zh", "学习记录"), ("ko", "학습 기록")):
+            with self.subTest(lang=lang):
+                result = mobile_score_sync.save_mobile_score_request(score_payload(targetLang=lang, rankingPublic=False))
+                self.assertTrue(result["ok"])
+                self.assertIn(expected, result["message"])
 
 
 if __name__ == "__main__":

@@ -21,7 +21,9 @@ load-bearing 関数があり、いずれも直接テストが無かった:
   触れるため修正は意図的に見送り中）。本テストは「読み側は安全」を明示的に固定する。
 """
 import unittest
+from unittest.mock import Mock, patch
 
+import score_append_utils
 from score_append_utils import _read_records_from_values, _row_from_headers
 
 
@@ -46,6 +48,16 @@ class RowFromHeadersTests(unittest.TestCase):
 
 
 class ReadRecordsFromValuesTests(unittest.TestCase):
+    def test_required_headers_distinguish_empty_account_from_invalid_sheet(self):
+        worksheet = Mock()
+        with patch.object(score_append_utils, "_open_worksheet", return_value=(worksheet, None)):
+            for values in ([], [["user", "wrong"]], [["user", "points", "points"]]):
+                with self.subTest(values=values):
+                    worksheet.get_all_values.return_value = values
+                    self.assertIsNone(score_append_utils.load_sheet_records("Scores", required_headers=("user", "points")))
+            worksheet.get_all_values.return_value = [["user", "points"]]
+            self.assertEqual(score_append_utils.load_sheet_records("Scores", required_headers=("user", "points")), [])
+
     def test_basic_parse(self):
         values = [["user", "points"], ["alice", "100"], ["bob", "50"]]
         self.assertEqual(
