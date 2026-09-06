@@ -1,6 +1,7 @@
 """Aggregate all saved learning records by name, independently of public ranking."""
 
 import datetime
+import re
 
 from ranking_utils import safe_float
 from score_append_utils import load_sheet_records
@@ -31,6 +32,10 @@ _MESSAGES = {
     },
 }
 
+_VOCAB_LEVELS = ("beginner", "intermediate", "advanced")
+_VOCAB_GROUP_ID = re.compile(r"([^:\s]+):([^:\s]+):g[1-9][0-9]*")
+_VOCAB_STAGE = re.compile(r"(?:beginner(?:_[1-3])?|intermediate(?:_[1-3])?|advanced(?:_[1-6])?)")
+
 
 def _category_key(value):
     return str(value or "").strip() or "unknown"
@@ -42,6 +47,31 @@ def _vocab_category(row):
         return pos
     group_id = str(row.get("group_id") or "").strip()
     return _category_key(group_id.split(":", 1)[0]) if ":" in group_id else "unknown"
+
+
+def _vocab_level(row):
+    """Recover a quiz's saved difficulty without reallocating mixed-group points."""
+    match = _VOCAB_GROUP_ID.fullmatch(str(row.get("group_id") or "").strip())
+    if not match or match[1] != _vocab_category(row):
+        return "unknown"
+    stages = match[2].split("+")
+    if not all(_VOCAB_STAGE.fullmatch(stage) for stage in stages):
+        return "unknown"
+    levels = {stage.split("_", 1)[0] for stage in stages}
+    # Scores are saved per quiz, so a group spanning levels must stay together.
+    return "+".join(level for level in _VOCAB_LEVELS if level in levels)
+
+
+def _sorted_vocab_levels(categories):
+    levels = [categories.get(key, {"key": key, "points": 0.0, "attempts": 0}) for key in _VOCAB_LEVELS]
+    mixed_keys = sorted(
+        (key for key in categories if key not in (*_VOCAB_LEVELS, "unknown")),
+        key=lambda key: tuple(_VOCAB_LEVELS.index(level) for level in key.split("+")),
+    )
+    levels.extend(categories[key] for key in mixed_keys)
+    if "unknown" in categories:
+        levels.append(categories["unknown"])
+    return levels
 
 
 def _add_category(categories, key, points):
@@ -60,6 +90,7 @@ def compute_user_progress(records, user):
     user = normalize_user(user)
     totals = {"overall": 0.0, "vocab": 0.0, "sentence": 0.0}
     vocab = {}
+    vocab_levels = {}
     sentence = {}
     subtopics = {}
     if user:
@@ -75,7 +106,11 @@ def compute_user_progress(records, user):
                 _add_category(sentence, topic, points)
                 _add_category(subtopics.setdefault(topic, {}), _category_key(row.get("subtopic")), points)
             else:
-                _add_category(vocab, _vocab_category(row), points)
+                pos = _vocab_category(row)
+                _add_category(vocab, pos, points)
+                _add_category(vocab_levels.setdefault(pos, {}), _vocab_level(row), points)
+    for pos, category in vocab.items():
+        category["levels"] = _sorted_vocab_levels(vocab_levels[pos])
     for topic, category in sentence.items():
         category["subtopics"] = _sorted_categories(subtopics[topic])
     return {"totals": totals, "categories": {"vocab": _sorted_categories(vocab), "sentence": _sorted_categories(sentence)}}

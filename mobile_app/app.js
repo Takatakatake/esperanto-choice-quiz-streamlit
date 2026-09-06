@@ -9,7 +9,7 @@ import { buildLocalizedQuestion } from "./quiz_questions.mjs";
 import { inspectLegacySession, commitLegacySessionImport, hasClassicMigrationProvenance, isLegacyScoreSaveBlocked } from "./legacy_session_migration.mjs";
 import { addToOutbox, matchesAccountResult, filterUserHistory, SerializedBridge, DurableScoreOutbox, canReplaceSession, persistPresentSession, isAccountCacheFresh, matchesScoreRecord, scoreRecordFromSession, hasConfirmedScoreEvidence } from "./learning_sync.mjs";
 
-const APP_VERSION = "2026-09-07-phrases-1";
+const APP_VERSION = "2026-09-07-vocab-levels-1";
 const STORAGE_PREFIX = "esperanto-choice-mobile";
 const SESSION_KEY = `${STORAGE_PREFIX}:session:v2`;
 const SETTINGS_KEY = `${STORAGE_PREFIX}:settings:v2`;
@@ -237,6 +237,9 @@ const TARGET_LANG_META = {
       progressEmpty: "この分野の保存済み記録はまだありません。",
       allFields: "全体",
       vocabBreakdown: "単語・品詞別",
+      progressUnknownLevel: "レベル不明",
+      progressMixedLevelsHint: "複数レベルを含むクイズの得点は、まとめて表示しています。",
+      progressUnknownLevelHint: "レベルを判別できない過去の記録も、品詞別の合計に含めています。",
       sentenceBreakdown: "例文・テーマ別",
       uncategorized: "未分類",
       settingsNotLoaded: "公開設定を確認してから変更できます。",
@@ -445,6 +448,9 @@ const TARGET_LANG_META = {
       progressEmpty: "此领域还没有已保存的记录。",
       allFields: "全部",
       vocabBreakdown: "单词・按词性",
+      progressUnknownLevel: "级别不明",
+      progressMixedLevelsHint: "包含多个级别的测验，其得分合并显示。",
+      progressUnknownLevelHint: "无法确定级别的历史记录也计入各词性的总分。",
       sentenceBreakdown: "例句・按主题",
       uncategorized: "未分类",
       settingsNotLoaded: "读取公开设置后即可更改。",
@@ -653,6 +659,9 @@ const TARGET_LANG_META = {
       progressEmpty: "이 분야에는 아직 저장된 기록이 없습니다.",
       allFields: "전체",
       vocabBreakdown: "단어·품사별",
+      progressUnknownLevel: "수준 미상",
+      progressMixedLevelsHint: "여러 수준이 포함된 퀴즈의 점수는 합쳐서 표시합니다.",
+      progressUnknownLevelHint: "수준을 확인할 수 없는 과거 기록도 품사별 합계에 포함됩니다.",
       sentenceBreakdown: "예문·주제별",
       uncategorized: "미분류",
       settingsNotLoaded: "공개 설정을 확인한 후 변경할 수 있습니다.",
@@ -3230,14 +3239,16 @@ function handleProgressResult(result) {
   if (result.ok) {
     state.progress.totals = Object.fromEntries(["overall", "vocab", "sentence"].map((key) =>
       [key, finiteNumber(result.totals?.[key], 0)]));
-    const categories = (items, nested = false) => (Array.isArray(items) ? items : [])
+    const categories = (items, children = "") => (Array.isArray(items) ? items : [])
       .filter(isPlainObject).map((item) => ({
         key: String(item.key || ""), points: finiteNumber(item.points, 0),
         attempts: clampInteger(item.attempts, 0, 99999999, 0),
-        subtopics: nested ? categories(item.subtopics) : [],
+        subtopics: children === "subtopics" ? categories(item.subtopics) : [],
+        levels: children === "levels" ? categories(item.levels) : [],
       }));
     state.progress.categories = {
-      vocab: categories(result.categories?.vocab), sentence: categories(result.categories?.sentence, true),
+      vocab: categories(result.categories?.vocab, "levels"),
+      sentence: categories(result.categories?.sentence, "subtopics"),
     };
   }
   const previousRankingPublic = state.progress.settings.rankingPublic;
@@ -3350,10 +3361,24 @@ function renderProgress() {
   for (const mode of ["vocab", "sentence"]) {
     const section = document.createElement("section");
     section.className = "progress-breakdown";
+    section.dataset.progressMode = mode;
     const heading = document.createElement("h4");
     heading.textContent = t(mode === "vocab" ? "vocabBreakdown" : "sentenceBreakdown");
     section.append(heading);
     const rows = progress.categories[mode];
+    if (mode === "vocab") {
+      const levelKeys = rows.flatMap((row) => row.levels.map((level) => level.key));
+      for (const [show, message] of [
+        [levelKeys.some((key) => key.includes("+")), "progressMixedLevelsHint"],
+        [levelKeys.includes("unknown"), "progressUnknownLevelHint"],
+      ]) {
+        if (!show) continue;
+        const hint = document.createElement("p");
+        hint.className = "muted-text";
+        hint.textContent = t(message);
+        section.append(hint);
+      }
+    }
     if (!rows.length) {
       const empty = document.createElement("p");
       empty.className = "muted-text";
@@ -3362,12 +3387,17 @@ function renderProgress() {
     }
     rows.forEach((row) => {
       const label = row.key ? mode === "vocab" ? labelForPos(row.key) : row.key : t("uncategorized");
-      if (mode === "sentence" && row.subtopics.length) {
+      const children = mode === "vocab" ? row.levels : row.subtopics;
+      if (children.length) {
         const details = document.createElement("details");
         const title = document.createElement("summary");
         title.append(createProgressRow(row, label));
         details.append(title);
-        row.subtopics.forEach((subtopic) => details.append(createProgressRow(subtopic, subtopic.key || t("uncategorized"))));
+        children.forEach((child) => {
+          const childLabel = mode === "vocab"
+            ? formatProgressLevelLabel(child.key) : child.key || t("uncategorized");
+          details.append(createProgressRow(child, childLabel));
+        });
         section.append(details);
       } else {
         section.append(createProgressRow(row, label));
@@ -3377,6 +3407,13 @@ function renderProgress() {
   }
   els.progressContent.replaceChildren(...sections);
   requestFrameHeightSync();
+}
+
+function formatProgressLevelLabel(key) {
+  const labels = STAGE_LABELS[state.mobileConfig.targetLang] || STAGE_LABELS.ja;
+  const stages = key.split("+");
+  return stages.every((stage) => Object.hasOwn(labels, stage))
+    ? stages.map((stage) => labels[stage]).join("＋") : t("progressUnknownLevel");
 }
 
 function createProgressRow(row, label) {

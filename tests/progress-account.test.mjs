@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { matchesAccountResult, SerializedBridge } from "../mobile_app/learning_sync.mjs";
 
 const source = readFileSync(new URL("../mobile_app/app.js", import.meta.url), "utf8");
-const handlers = ["handleProgressResult", "createEmptyRankingsState", "isPlainObject"].map((name) => {
+const handlers = ["handleProgressResult", "createEmptyRankingsState", "isPlainObject", "finiteNumber", "clampInteger"].map((name) => {
   const start = source.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, `Application handler ${name} must exist`);
   const end = source.indexOf("\nfunction ", start + 1);
@@ -32,8 +32,7 @@ function progressApp({ previousPublic = true, uncertain = false, requestedUser =
   bridge.enqueue({ type: "save_score", requestId: "authorized-score", user: "A" });
   const app = vm.createContext({
     state, bridgeQueue: bridge, matchesAccountResult, currentUserName: () => currentUser,
-    finiteNumber: (value, fallback) => Number.isFinite(Number(value)) ? Number(value) : fallback,
-    clampInteger: (value) => value, t: (key) => key,
+    t: (key) => key,
     requestRankings: (options) => requests.push(options), renderProgress: () => {},
     renderCloudRankings: () => rendered.push(JSON.parse(JSON.stringify(state.rankings))),
   });
@@ -119,4 +118,68 @@ test("invalid-name responses show the validation error immediately and release t
     assert.equal(state.progress.requestId, "");
     assert.equal(bridge.active, null);
   }
+});
+
+test("progress preserves ordered vocabulary levels and sentence subtopics without changing parent totals", () => {
+  const { app, state, result } = progressApp();
+  result.categories = {
+    vocab: [{
+      key: "noun", points: 150, attempts: 5,
+      levels: [
+        { key: "beginner", points: 20, attempts: 1 },
+        { key: "intermediate", points: 30, attempts: 1 },
+        { key: "advanced", points: 0, attempts: 0 },
+        { key: "beginner+intermediate", points: 40, attempts: 1 },
+        { key: "unknown", points: 60, attempts: 2 },
+      ],
+    }],
+    sentence: [{ key: "travel", points: 50, attempts: 1, subtopics: [{ key: "train", points: 50, attempts: 1 }] }],
+  };
+  app.handleProgressResult(result);
+  const categories = JSON.parse(JSON.stringify(state.progress.categories));
+  const levels = categories.vocab[0].levels;
+  assert.deepEqual(levels.map(({ key, points, attempts }) => ({ key, points, attempts })), result.categories.vocab[0].levels);
+  assert.equal(levels.reduce((sum, level) => sum + level.points, 0), categories.vocab[0].points);
+  assert.deepEqual(categories.sentence[0].subtopics.map(({ key, points }) => ({ key, points })), [{ key: "train", points: 50 }]);
+  assert.equal(state.progress.totals.overall, 200);
+});
+
+test("older progress responses without level details retain their vocabulary and sentence totals", () => {
+  const { app, state, result } = progressApp();
+  result.categories = {
+    vocab: [{ key: "noun", points: 150, attempts: 1 }],
+    sentence: [{ key: "travel", points: 50, attempts: 1 }],
+  };
+  app.handleProgressResult(result);
+  assert.equal(state.progress.categories.vocab[0].points, 150);
+  assert.deepEqual(Array.from(state.progress.categories.vocab[0].levels), []);
+  assert.equal(state.progress.categories.sentence[0].points, 50);
+  assert.deepEqual(Array.from(state.progress.categories.sentence[0].subtopics), []);
+});
+
+test("malformed nested progress values cannot cause non-finite scores or recursive child data", () => {
+  const { app, state, result } = progressApp();
+  result.categories = {
+    vocab: [
+      { key: "noun", points: 150, levels: [
+        null, [], "invalid",
+        { key: "beginner", points: "12.5", attempts: "2" },
+        { key: "advanced", points: "Infinity", attempts: -9, levels: [{ key: "unknown", points: 999 }] },
+        { key: "unknown", points: "NaN", attempts: 100000000000 },
+      ] },
+      { key: "verb", points: 0, levels: { key: "beginner", points: 999 } },
+    ],
+    sentence: [{ key: "travel", points: 50, subtopics: false }],
+  };
+  app.handleProgressResult(result);
+  const levels = JSON.parse(JSON.stringify(state.progress.categories.vocab[0].levels));
+  assert.deepEqual(levels.map(({ key, points, attempts }) => ({ key, points, attempts })), [
+    { key: "beginner", points: 12.5, attempts: 2 },
+    { key: "advanced", points: 0, attempts: 0 },
+    { key: "unknown", points: 0, attempts: 99999999 },
+  ]);
+  assert.ok(levels.every((row) => row.levels.length === 0 && row.subtopics.length === 0));
+  assert.deepEqual(Array.from(state.progress.categories.vocab[1].levels), []);
+  assert.deepEqual(Array.from(state.progress.categories.sentence[0].subtopics), []);
+  assert.equal(state.progress.categories.vocab[0].points, 150);
 });
