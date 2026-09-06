@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Update the mobile app version constant used by the diagnostics screen."""
+"""Synchronize the mobile app, stylesheet URL, and service worker versions."""
 
 from __future__ import annotations
 
@@ -11,8 +11,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_JS = ROOT / "mobile_app" / "app.js"
 VERSION_RE = re.compile(r'const APP_VERSION = "([^"]+)";')
+CACHE_VERSION_RE = re.compile(r'const CACHE_VERSION = "esperanto-mobile-pwa-[^"]+";')
+INDEX_STYLESHEET_RE = re.compile(r'href="\./styles\.css(?:\?[^"]*)?"')
+SHELL_STYLESHEET_RE = re.compile(r'"\./mobile_app/styles\.css(?:\?[^"]*)?"')
 SAFE_VERSION_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}-[A-Za-z0-9._-]+$")
 
 
@@ -36,6 +38,40 @@ def default_version(label: str) -> str:
     return f"{dt.date.today().isoformat()}-{safe_label}"
 
 
+def update_mobile_version(version: str, *, root: Path = ROOT) -> list[Path]:
+    """Validate all version locations before changing any file."""
+    if not SAFE_VERSION_RE.fullmatch(version):
+        raise ValueError("Version must look like YYYY-MM-DD-label and use only letters, digits, dot, underscore, or hyphen.")
+
+    replacements = {
+        root / "mobile_app" / "app.js": [
+            (VERSION_RE, f'const APP_VERSION = "{version}";'),
+        ],
+        root / "mobile_app" / "index.html": [
+            (INDEX_STYLESHEET_RE, f'href="./styles.css?v={version}"'),
+        ],
+        root / "mobile-sw.js": [
+            (CACHE_VERSION_RE, f'const CACHE_VERSION = "esperanto-mobile-pwa-{version}";'),
+            (SHELL_STYLESHEET_RE, f'"./mobile_app/styles.css?v={version}"'),
+        ],
+    }
+    pending: list[tuple[Path, str]] = []
+    for path, patterns in replacements.items():
+        original = path.read_text(encoding="utf-8")
+        updated = original
+        for pattern, replacement in patterns:
+            if len(pattern.findall(updated)) != 1:
+                raise ValueError(f"Expected exactly one {pattern.pattern} in {path.relative_to(root)}.")
+            updated = pattern.sub(lambda _match: replacement, updated, count=1)
+        if updated != original:
+            pending.append((path, updated))
+
+    # A missing or ambiguous location must not leave a partially updated release.
+    for path, updated in pending:
+        path.write_text(updated, encoding="utf-8")
+    return [path for path, _updated in pending]
+
+
 def main() -> int:
     args = parse_args()
     version = args.version.strip() if args.version else default_version(args.label)
@@ -46,18 +82,15 @@ def main() -> int:
         )
         return 2
 
-    text = APP_JS.read_text(encoding="utf-8")
-    match = VERSION_RE.search(text)
-    if not match:
-        print(f"APP_VERSION constant was not found in {APP_JS.relative_to(ROOT)}.", file=sys.stderr)
+    try:
+        changed = update_mobile_version(version)
+    except (OSError, ValueError) as error:
+        print(f"Could not update mobile versions: {error}", file=sys.stderr)
         return 1
-    if match.group(1) == version:
-        print(f"APP_VERSION is already {version}.")
-        return 0
-
-    updated = VERSION_RE.sub(f'const APP_VERSION = "{version}";', text, count=1)
-    APP_JS.write_text(updated, encoding="utf-8")
-    print(f"Updated APP_VERSION: {match.group(1)} -> {version}")
+    if changed:
+        print(f"Updated mobile app and asset versions to {version} ({len(changed)} files).")
+    else:
+        print(f"Mobile app and asset versions are already {version}.")
     return 0
 
 

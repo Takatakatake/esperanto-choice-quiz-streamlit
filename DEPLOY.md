@@ -79,7 +79,7 @@ JavaScript・CSSなど画面だけの変更では、JSONを再生成せず次を
 npm run version:mobile -- 2026-09-06-unified-learning
 ```
 
-どちらのコマンドも `APP_VERSION` を更新します。PWAの更新用に `mobile-sw.js` の `CACHE_VERSION` も新しい値に変更し、検証します。
+どちらのコマンドも `APP_VERSION`、CSSのURLに付ける版番号、PWAの `CACHE_VERSION` と事前保存するCSSのURLをまとめて更新します。画面変更には新しい版番号を指定し、以下の検証後、本番を通常の再読み込みで開いて更新を確認します。
 
 ```bash
 npm run test:unit
