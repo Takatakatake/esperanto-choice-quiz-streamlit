@@ -683,7 +683,7 @@
 837,1,Beginner 1,Making Friends,Introductions,Ĉi tiu estas Lucy,This is Lucy.,こちらはルーシーです。,这是露西。,여기는 루시입니다.,Это Люси.
 838,1,Beginner 1,Making Friends,Introductions,Kiel vi nomiĝas?,What's your name?,お名前を教えていただけますか？,你叫什么名字？,이름이 뭐예요?,Как тебя зовут?
 839,1,Beginner 1,Making Friends,Introductions,Mia nomo estas Diana,My name is Diana.,私の名前はダイアナです。,我叫戴安娜。,제 이름은 다이애나입니다.,Меня зовут Диана.
-840,1,Beginner 1,Making Friends,Introductions,Kio estas via familinomo?,What's your surname?,名字は何ですか？,你姓什么？,성함이 어떻게 되세요?,Как ваша фамилия?
+840,1,Beginner 1,Making Friends,Introductions,Kio estas via familinomo?,What's your surname?,名字は何ですか？,你姓什么？,성이 어떻게 되세요?,Как ваша фамилия?
 841,3,Intermediate 1,Making Friends,Introductions,Ĉu tio estas via nomo?,Is that your name?,それはあなたのお名前ですか？,那是你的名字吗？,그게 당신의 이름인가요?,Это ваше имя?
 842,2,Beginner 2,Making Friends,Introductions,Kiuj ili estas?,Who are they?,彼らは誰ですか？,他们是谁？,그들은 누구인가요?,Кто они?
 843,2,Beginner 2,Making Friends,Introductions,Iliaj nomoj estas Neil kaj Anna,Their names are Neil and Anna.,彼らの名前はニールとアンナです。,他们的名字是尼尔和安娜。,그들의 이름은 닐과 안나예요.,Их зовут Нейл и Анна.
@@ -2117,7 +2117,7 @@
 2271,7,Advanced 2,Car,Driving & Parking,Kie estas la pagmaŝino por parkumado?,Where's the parking meter?,駐車料金の精算機はどこですか？,停车缴费机在哪里？,주차 요금 정산기는 어디에 있나요?,Где паркомат?
 2272,7,Advanced 2,Car,Driving & Parking,Kiom kostas por horo?,What's the charge per hour?,1時間あたりの料金はいくらですか？,每小时收费是多少？,시간당 요금이 얼마인가요?,Сколько стоит в час?
 2273,7,Advanced 2,Car,Driving & Parking,Mia aŭto estas registrita en Ĉilio,My car is registered in Chile.,私の車はチリで登録されています。,我的车是在智利登记的。,제 차는 칠레에 등록되어 있어요.,Мой автомобиль зарегистрирован в Чили.
-2274,7,Advanced 2,Car,Driving & Parking,Kie estas la elirejo al la aŭtovojo?,Where is the exit to the motorway?,高速道路の出口はどこですか。,高速公路的出口在哪里？,고속도로 출구가 어디에 있나요?,Где выезд на шоссе?
+2274,7,Advanced 2,Car,Driving & Parking,Kie estas la elirejo al la aŭtovojo?,Where is the exit to the motorway?,高速道路への入口はどこですか。,高速公路的入口在哪里？,고속도로 진입로가 어디에 있나요?,Где выезд на шоссе?
 2275,7,Advanced 2,Car,Driving & Parking,Ĉu ni estas sur la ĝusta vojo al Sarajevo?,Are we on the right road for Sarajevo?,この道でサラエボに行けますか？,我们现在走的是去萨拉热窝的路吗？,저희가 사라예보로 가는 길이 맞나요?,Мы едем в Сараево по верной дороге?
 2276,7,Advanced 2,Car,Driving & Parking,Kiom da tempo daŭras per aŭto?,How long does it take by car?,車でどのくらいかかりますか？,开车需要多长时间？,차로 얼마나 걸리나요?,Сколько занимает дорога на машине?
 2277,8,Advanced 3,Car,Driving & Parking,"Ĉu vi povus montri al mi sur la mapo, kie mi estas?",Could you show me where I am on the map?,地図で私がどこにいるか教えていただけますか？,你能帮我在地图上指一下我现在的位置吗？,지도에서 제 위치가 어디인지 보여주실 수 있나요?,"Не могли бы вы показать мне на карте, где я нахожусь?"
@@ -2585,7 +2585,7 @@
 2739,5,Intermediate 3,Hotel,During Your Stay,Bonvolu gladigi ĉi tion,Please have this pressed.,こちらにアイロンをかけてください。,请帮忙熨烫一下。,이것을 다림질해 주세요.,"Пожалуйста, погладьте это."
 2740,6,Advanced 1,Hotel,During Your Stay,Ĉu vi povus purigi por mi ĉi tiun kostumon?,Could I have this suit cleaned?,このスーツをクリーニングしていただけますか？,请帮我把这套西服干洗一下。,이 정장을 세탁해 주실 수 있나요?,Вы можете почистить мне этот костюм?
 2741,6,Advanced 1,Hotel,During Your Stay,Kiam miaj vestoj estos pretaj?,When will my clothes be ready?,私の服はいつ仕上がりますか？,我的衣服什么时候可以取？,제 옷이 언제 준비되나요?,Когда моя одежда будет готова?
-2742,6,Advanced 1,Hotel,During Your Stay,Mi bezonas ĝin ĝis la kvina,I need it by 5 o'clock.,5時までにお願いします。,我五点之前就需要。,5시까지 필요해요.,Мне это нужно к 5 часам.
+2742,6,Advanced 1,Hotel,During Your Stay,Mi bezonas ĝin preta ĝis la kvina,I need it by 5 o'clock.,5時までにお願いします。,我五点之前就需要。,5시까지 필요해요.,Мне это нужно к 5 часам.
 2743,6,Advanced 1,Hotel,During Your Stay,Mi revenos ĉirkaŭ la deka horo,I'll be back around ten o'clock.,10時ごろに戻ります。,我大概十点左右回来。,열 시쯤 돌아올게요.,Я вернусь около десяти часов.
 2744,7,Advanced 2,Hotel,During Your Stay,Kie estas la savelirejo?,Where is the emergency exit?,非常口はどこですか。,紧急出口在哪里？,비상구가 어디에 있나요?,Где аварийный выход?
 2745,7,Advanced 2,Hotel,During Your Stay,Ĉu mi povas iel helpi vin?,Is there anything I can help you with?,何かお手伝いできることはありますか？,有什么我可以帮忙的吗？,제가 도와드릴 일이 있을까요?,Я могу вам чем-нибудь помочь?
@@ -4458,7 +4458,7 @@
 4612,8,Advanced 3,Health,Diseases,Miaj genuoj doloras,My knees are hurting.,膝が痛いです。,我的膝盖很疼。,무릎이 아파요.,У меня болят колени.
 4613,9,Expert 1,Health,Diseases,Miaj limfonodoj estas ŝvelintaj,My lymph nodes are swollen.,リンパ節が腫れています。,我的淋巴结肿大。,림프절이 부었어요.,У меня увеличились лимфатические узлы.
 4614,9,Expert 1,Health,Diseases,Mi havas gravan mikozon de la piedoj,I've got a bad case of athlete's foot.,ひどい水虫になってしまいました。,我得了严重的脚气。,무좀에 심하게 걸렸어요.,У меня запущенный случай грибка стопы.
-4615,9,Expert 1,Health,Diseases,"Mi pensas, ke mi streĉis muskolon en mia kruro",I think I've pulled a muscle in my leg.,足の筋肉を痛めたみたいです。,我觉得我腿部肌肉拉伤了。,다리 근육을 다친 것 같아요.,"Думаю, я потянула мышцу на ноге."
+4615,9,Expert 1,Health,Diseases,"Mi pensas, ke mi trostreĉis muskolon en mia kruro",I think I've pulled a muscle in my leg.,足の筋肉を痛めたみたいです。,我觉得我腿部肌肉拉伤了。,다리 근육을 다친 것 같아요.,"Думаю, я потянула мышцу на ноге."
 4616,10,Expert 2,Health,Diseases,"Mi pensas, ke mi manĝis ion malbonan",I think that I have eaten something bad.,何か悪いものを食べてしまったみたいです。,我觉得我吃坏肚子了。,제가 뭔가 상한 음식을 먹은 것 같아요.,"Думаю, я съела что-то не то."
 4617,9,Expert 1,Health,Diseases,Mi sentas min deprimita,I've been feeling depressed.,最近、気分が落ち込んでいます。,我一直感到很抑郁。,요즘 우울함을 느끼고 있어요.,Я чувствую себя подавленным.
 4618,10,Expert 2,Health,Diseases,Mi havas malfacilaĵojn pri dormado,I've been having difficulty sleeping.,最近、なかなか眠れません。,我最近一直睡不好。,요즘 잠을 잘 이루지 못하고 있어요.,У меня проблемы со сном.
