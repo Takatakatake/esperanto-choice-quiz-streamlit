@@ -10,6 +10,8 @@ the process to reset it. Never deploy this fixture as a production entry point.
 Initial totals (overall / vocab / sentence):
     Review-A: 200 / 150 / 50, public; noun 120, legacy verb 30, travel/train 50.
     Review-B: 1200000 / 1000000 / 200000, private; progress remains readable.
+    Review-Long (browser fixture): 7040 / 200 / 6840, private; 18 sentence
+        categories with four subtopics each, ending with Time & Weather.
 Other names start with zero points and the normal public default.
 All seeded records use today's timestamp for the today/month ranking checks.
 """
@@ -96,7 +98,7 @@ class MemoryWorksheet:
 
 
 class MemorySheetStore:
-    def __init__(self):
+    def __init__(self, *, include_long_history=False):
         self._cache_prefix = f"local-learning-fixture-{uuid.uuid4()}"
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         records = [
@@ -106,6 +108,27 @@ class MemorySheetStore:
             {"user": "Review-B", "mode": "vocab", "pos": "noun", "points": 1_000_000, "save_id": "fixture-b-noun"},
             {"user": "Review-B", "mode": "sentence", "topic": "conversation", "points": 200_000, "save_id": "fixture-b-sentence"},
         ]
+        if include_long_history:
+            topics = [
+                "Basic Sentences", "General Conversation", "Emergencies", "Making Friends",
+                "Dating", "Education", "Jobs", "Travel", "Other Transport", "Hotel",
+                "Restaurant & Pub", "Food", "Shopping", "Leisure Time", "Services", "Health",
+                "Communication Means", "Time & Weather",
+            ]
+            records.extend([
+                {"user": "Review-Long", "mode": "vocab", "pos": "noun", "points": 120, "save_id": "fixture-long-noun"},
+                {"user": "Review-Long", "mode": "vocab", "pos": "verb", "points": 80, "save_id": "fixture-long-verb"},
+            ])
+            for topic_index, topic in enumerate(topics):
+                subtopics = ["Calendar", "Telling the Time", "Time Expressions", "Weather"] if topic == "Time & Weather" else [
+                    "Basics", "Conversation", "Practice", "Review",
+                ]
+                for subtopic_index, subtopic in enumerate(subtopics):
+                    records.append({
+                        "user": "Review-Long", "mode": "sentence", "topic": topic, "subtopic": subtopic,
+                        "points": (len(topics) - topic_index) * 10,
+                        "save_id": f"fixture-long-{topic_index}-{subtopic_index}",
+                    })
         for record in records:
             record.update(ts=now, total=10, correct=10)
         headers = list(dict.fromkeys(key for record in records for key in record))
@@ -125,6 +148,10 @@ class MemorySheetStore:
                 {"user": "Review-B", "ranking_public": "false", "updated_at": now},
             ]),
         }
+        if include_long_history:
+            self.sheets["UserStats"].append_row(["Review-Long", 7040, now], value_input_option="RAW")
+            self.sheets["UserStatsSentence"].append_row(["Review-Long", 6840, now], value_input_option="RAW")
+            self.sheets["UserSettings"].append_row(["Review-Long", "false", now], value_input_option="RAW")
 
     def open_worksheet(self, worksheet_name, *, refresh=False):
         # No fallback or credential lookup exists, including for unknown sheets.
@@ -133,7 +160,9 @@ class MemorySheetStore:
 
 @st.cache_resource(show_spinner=False)
 def shared_fixture_store():
-    return MemorySheetStore()
+    # Every browser shares one store: the patched module-level opener must never
+    # switch between different databases when concurrent Streamlit sessions rerun.
+    return MemorySheetStore(include_long_history=True)
 
 
 def run_fixture():
