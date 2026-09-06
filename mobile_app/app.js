@@ -3849,6 +3849,11 @@ function setView(view) {
   els.quizNav.classList.toggle("is-selected", view === "quiz" || view === "result");
   els.historyNav.classList.toggle("is-selected", view === "history");
   els.diagnosticsNav.classList.toggle("is-selected", view === "diagnostics");
+  // Initial data loading chooses the first view when it finishes. Keep users
+  // from navigating to a page that initialization would immediately replace.
+  [els.homeNav, els.quizNav, els.historyNav, els.diagnosticsNav].forEach((button) => {
+    button.disabled = view === "loading";
+  });
   if (view === "setup") {
     renderSetup();
   }

@@ -222,6 +222,38 @@ for (const nested of [false, true]) {
   });
 }
 
+test("navigation stays disabled until startup data is ready and then opens history", async ({ page }) => {
+  test.setTimeout(45000);
+  let releaseData;
+  let dataBlocked = false;
+  const dataGate = new Promise((resolve) => { releaseData = resolve; });
+  await page.route("**/data/vocab.json", async (route) => {
+    dataBlocked = true;
+    await dataGate;
+    await route.continue();
+  });
+  try {
+    await page.goto(localAppUrl(true), { waitUntil: "domcontentloaded" });
+    await expectLocalFixture(page);
+    const app = page.frameLocator("iframe[title*='esperanto_mobile_pwa']");
+    await expect.poll(() => dataBlocked, { timeout: 15000 }).toBe(true);
+    await expect(app.locator("#app")).toHaveClass(/view-loading/);
+    for (const id of ["homeNav", "quizNav", "historyNav", "diagnosticsNav"]) {
+      await expect(app.locator(`#${id}`)).toBeDisabled();
+    }
+    releaseData();
+    await expect(app.locator("#setupView")).toHaveClass(/is-active/, { timeout: 15000 });
+    for (const id of ["homeNav", "quizNav", "historyNav", "diagnosticsNav"]) {
+      await expect(app.locator(`#${id}`)).toBeEnabled();
+    }
+    await app.locator("#historyNav").click();
+    await expect(app.locator("#historyView")).toHaveClass(/is-active/);
+    await expect(app.locator("#historyUserName")).toBeVisible();
+  } finally {
+    releaseData();
+  }
+});
+
 test("Streamlit mobile entry uses the localStorage app and survives reload", async ({ page }) => {
   const appUrl = localAppUrl();
   const errors = [];
@@ -531,7 +563,11 @@ test("fixture accounts show their own field totals while private accounts stay o
   await expectLocalFixture(page);
   const app = page.frameLocator("iframe[title*='esperanto_mobile_pwa']");
   await expect(app.locator("#startButton")).toBeEnabled({ timeout: 15000 });
+  // The HTML start button is enabled even while its setup view is hidden.
+  // Wait for initialization before navigating, or init can still select setup.
+  await expect(app.locator("#setupView")).toHaveClass(/is-active/, { timeout: 15000 });
   await app.locator("#historyNav").click();
+  await expect(app.locator("#historyView")).toHaveClass(/is-active/);
   await app.locator("#historyUserName").fill("Review-A");
   await app.locator("#historyUserButton").click();
   await expect(app.locator("#progressContent .progress-totals strong")).toHaveText(["200.0点", "150.0点", "50.0点"], { timeout: 15000 });
