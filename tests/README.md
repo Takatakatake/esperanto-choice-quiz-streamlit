@@ -25,6 +25,8 @@ npm run test:client
 | 旧PC版からの明示的な引継ぎ | `legacy-session-migration.test.mjs`, `test_classic_session_persistence.py` |
 | メモリ内シートを使う実バックエンド | `test_learning_fixture.py` |
 | アプリ・CSS・PWAの版更新 | `test_update_mobile_version.py` |
+| 公開設定の再取得とオフライン再訪 | `progress-account.test.mjs`, `service-worker.test.mjs` |
+| 不正な名前への応答とアカウント境界 | `test_account_identity.py` |
 
 公開設定のテストでは、非公開ユーザーが全ランキングと自身の追加行から除外されること、設定取得失敗時に一覧を出さないこと、設定の読取失敗で既存行を上書きしないこと、書込み後の応答途切れで古い公開要求を再送しないことを確認します。進捗は全履歴・旧形式・重複除去を確認し、名前変更前の応答を混ぜないようにします。
 
