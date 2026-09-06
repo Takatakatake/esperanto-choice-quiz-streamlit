@@ -103,6 +103,17 @@ async function networkFirst(request) {
     if (cached) {
       return cached;
     }
+    // The first visit precedes worker activation, so its directory/query URL
+    // may never have been cached. Both entry URLs use the installed app shell.
+    if (request.mode === "navigate") {
+      const indexUrl = new URL("./mobile_app/index.html", self.location.href);
+      const requestPath = new URL(request.url).pathname;
+      const directoryPath = indexUrl.pathname.slice(0, -"index.html".length);
+      if (requestPath === directoryPath || requestPath === indexUrl.pathname) {
+        const shell = await cache.match(indexUrl.href);
+        if (shell) return shell;
+      }
+    }
     throw error;
   }
 }
