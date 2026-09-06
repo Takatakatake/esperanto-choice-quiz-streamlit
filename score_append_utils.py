@@ -80,6 +80,7 @@ def _open_worksheet(worksheet_name: str, *, refresh: bool = False) -> tuple[Opti
 
     try:
         client = gspread.service_account_from_dict(creds)
+        client.set_timeout((5, 20))
         if target.startswith("http://") or target.startswith("https://"):
             ss = client.open_by_url(target)
         else:
@@ -125,8 +126,9 @@ def _load_headers(ws: gspread.Worksheet, cache_key: Optional[str], *, refresh: b
 
 
 def _write_header_row(ws: gspread.Worksheet, cache_key: Optional[str], headers: list[str]) -> list[str]:
-    normalized = [str(h).strip() for h in headers if str(h).strip()]
-    if not normalized:
+    # Empty header cells still occupy columns containing historical row data.
+    normalized = [str(h).strip() for h in headers]
+    if not any(normalized):
         return []
     end_cell = rowcol_to_a1(1, len(normalized))
     ws.update(f"A1:{end_cell}", [normalized], value_input_option="RAW")
@@ -293,14 +295,20 @@ def append_score_row_safe(
     return bool(last_result)
 
 
-def load_sheet_records(worksheet_name: str, *, refresh: bool = False) -> Optional[list[Dict]]:
+def load_sheet_records(
+    worksheet_name: str, *, refresh: bool = False, required_headers=()
+) -> Optional[list[Dict]]:
     ws, cache_key = _open_worksheet(worksheet_name, refresh=refresh)
     if ws is None:
         return None
     try:
         values = _read_sheet_values(ws)
+        headers = [str(h).strip() for h in values[0]] if values else []
+        if any(headers.count(header) != 1 for header in required_headers):
+            _invalidate_cache(cache_key)
+            return None
         if refresh and cache_key:
-            _HEADER_CACHE[cache_key] = [str(h).strip() for h in values[0]] if values else []
+            _HEADER_CACHE[cache_key] = headers
         return _read_records_from_values(values)
     except Exception:
         _invalidate_cache(cache_key)
@@ -364,6 +372,9 @@ def upsert_user_total(
                             current_max_total = current_total
                 target_total = expected_total
                 if current_max_total is not None and current_max_total > target_total:
+                    # A lower log snapshot does not prove older totals are wrong
+                    # or that the entire historical log is present. Never repair
+                    # a user's accumulated points downward during an ordinary save.
                     target_total = current_max_total
                 row_values = _row_from_headers(
                     {

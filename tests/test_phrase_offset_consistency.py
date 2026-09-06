@@ -10,8 +10,7 @@
   3. 利用側ファイルが中央定数 `PHRASE_ID_OFFSET` を参照している。
 
 これにより、誰かが再びどこかに `- 155` を直書きしてキーを食い違わせる退行を検知する。
-（ZH/KO 例文クローンの同オフセット行は test_clone_parity が別途、本体との一致を担保する。）
-純粋追加・振る舞い不変。
+各言語の画面は共通JSONを利用し、音声キーの生成は以下のツールに集約されている。
 """
 import ast
 import unittest
@@ -23,7 +22,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # PhraseID オフセットでキーを作る利用側ファイル群。
 FILES = [
-    "sentence_app.py",
     "tools/build_mobile_data.py",
     "tools/validate_mobile_assets.py",
     "tools/reconcile_phrase_audio_rhvoice.py",

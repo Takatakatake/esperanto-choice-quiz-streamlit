@@ -53,7 +53,7 @@ def load_score_records_for_totals(
 ) -> Optional[list[Dict]]:
     """Read the canonical score log with short retries for total recomputation."""
     for attempt in range(max(1, retries)):
-        records = load_sheet_records(worksheet_name, refresh=True)
+        records = load_sheet_records(worksheet_name, refresh=True, required_headers=("user", "points"))
         if records is not None:
             return records
         if attempt + 1 < max(1, retries):

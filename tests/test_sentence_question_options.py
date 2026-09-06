@@ -1,65 +1,69 @@
-"""例文4択の不変条件: 同一表示の選択肢を出さない（重複排除ロジックの回帰防止）。
+"""The live browser question builder must never render duplicate choices."""
 
-例文データには「同じエスペラント文・同じ訳」の行が意図的に複数存在する
-（validate_mobile_assets でも検出: `Pardonu min`/「申し訳ありません。」等）。
-これらは出題対象として残しつつ、4択の選択肢に同一表示が並ばないよう
-`sentence_app.build_questions` が表示テキストで重複排除している（direction に応じて
-`japanese`/`phrase` を切り替え、`seen_options` で正解と誤答の表示を一意化）。
-
-この重複排除は実データに重複が実在するため本番で実際に効いている load-bearing な
-ロジックだが、従来テストが無かった。本テストは合成データ（既知の重複ペアを含む）で
-実関数を直接呼び、両方向・複数シードで「全選択肢の表示が相異なる」ことを検証する。
-振る舞いは変えない純粋追加。
-"""
-import random
+import json
+import subprocess
 import unittest
+from pathlib import Path
 
-from sentence_app import build_questions
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def _make_entries():
-    """8件の合成例文。うち2組は『表示が衝突する』ペアを意図的に含む。"""
-    entries = []
-    # 衝突ペアA: japanese が同一（eo_to_ja の選択肢表示が衝突）だが phrase は別
-    entries.append({"phrase": "Frazo A1", "japanese": "同じ日本語", "level": 1, "phrase_id": 1})
-    entries.append({"phrase": "Frazo A2", "japanese": "同じ日本語", "level": 1, "phrase_id": 2})
-    # 衝突ペアB: phrase が同一（ja_to_eo の選択肢表示が衝突）だが japanese は別
-    entries.append({"phrase": "Sama frazo", "japanese": "日本語B1", "level": 1, "phrase_id": 3})
-    entries.append({"phrase": "Sama frazo", "japanese": "日本語B2", "level": 1, "phrase_id": 4})
-    # 完全重複ペア（phrase も japanese も同一＝実データの Pardonu min 相当）
-    entries.append({"phrase": "Pardonu min", "japanese": "申し訳ありません。", "level": 1, "phrase_id": 5})
-    entries.append({"phrase": "Pardonu min", "japanese": "申し訳ありません。", "level": 1, "phrase_id": 6})
-    # 残りは全て相異なる（4択を成立させる余裕を持たせる）
-    for i in range(7, 15):
-        entries.append({"phrase": f"Frazo {i}", "japanese": f"文{i}", "level": 1, "phrase_id": i})
-    return entries
+def make_entries():
+    pairs = [
+        ("Frazo A1", "同じ日本語"),
+        ("Frazo A2", "同じ日本語"),
+        ("Sama frazo", "日本語B1"),
+        ("Sama frazo", "日本語B2"),
+        ("Pardonu min", "申し訳ありません。"),
+        ("Pardonu min", "申し訳ありません。"),
+    ] + [(f"Frazo {index}", f"文{index}") for index in range(7, 15)]
+    return [
+        {"id": index, "eo": eo, "ja": ja, "level": 1}
+        for index, (eo, ja) in enumerate(pairs)
+    ]
 
 
 class SentenceQuestionOptionUniquenessTests(unittest.TestCase):
-    def _check_direction(self, direction: str, display_key: str) -> None:
-        entries = _make_entries()
-        any_question = False
-        for seed in range(20):  # 複数シードでシャッフル順を変えて網羅
-            questions = build_questions(entries, levels={1}, rng=random.Random(seed), direction=direction)
-            for q in questions:
-                any_question = True
-                labels = [opt[display_key] for opt in q["options"]]
-                self.assertEqual(
-                    len(set(labels)),
-                    len(labels),
-                    msg=f"direction={direction} seed={seed} で同一表示の選択肢が発生: {labels}",
-                )
-                # 正解インデックスが範囲内で整合していること。
-                self.assertTrue(0 <= q["answer_index"] < len(q["options"]))
-        self.assertTrue(any_question, f"direction={direction}: 質問が1件も生成されず検証が空振り")
+    def check_direction(self, direction, display_key):
+        source = """
+            import { buildLocalizedQuestion } from "./mobile_app/quiz_questions.mjs";
+            const pool = POOL;
+            const questions = [];
+            for (let seed = 0; seed < 20; seed += 1) {
+                let value = seed;
+                const rng = () => {
+                    value = (Math.imul(value, 1664525) + 1013904223) >>> 0;
+                    return value / 4294967296;
+                };
+                for (const correct of pool) {
+                    const question = buildLocalizedQuestion({
+                        mode: "sentence", correct, pool, rng,
+                        direction: DIRECTION, targetLang: "ja",
+                    });
+                    if (question) questions.push(question);
+                }
+            }
+            console.log(JSON.stringify(questions));
+        """.replace("POOL", json.dumps(make_entries())).replace("DIRECTION", json.dumps(direction))
+        run = subprocess.run(
+            ["node", "--input-type=module", "-e", source], cwd=ROOT,
+            text=True, capture_output=True, check=True, timeout=20,
+        )
+        questions = json.loads(run.stdout)
+        self.assertEqual(len(questions), 20 * len(make_entries()))
+        for question in questions:
+            labels = [option[display_key] for option in question["options"]]
+            self.assertEqual(len(labels), 4)
+            self.assertEqual(len(set(labels)), 4)
+            correct = question["options"][question["answerIndex"]]
+            self.assertEqual(correct["eo"], question["promptEo"])
+            self.assertEqual(correct["ja"], question["promptJa"])
 
     def test_eo_to_ja_options_have_unique_japanese(self):
-        # エスペラント→日本語: 選択肢は japanese 表示。重複してはならない。
-        self._check_direction("eo_to_ja", "japanese")
+        self.check_direction("eo_to_ja", "ja")
 
     def test_ja_to_eo_options_have_unique_esperanto(self):
-        # 日本語→エスペラント: 選択肢は phrase(エスペラント) 表示。重複してはならない。
-        self._check_direction("ja_to_eo", "phrase")
+        self.check_direction("ja_to_eo", "eo")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,13 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-quality-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lightweight-checks:
     runs-on: ubuntu-latest
@@ -37,5 +44,73 @@ jobs:
       - name: Run Python unit tests
         run: npm run test:unit
 
+      - name: Run browser logic unit tests
+        run: npm run test:client
+
       - name: Validate mobile assets quickly
         run: npm run validate:mobile-assets:quick
+
+  browser-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install test dependencies
+        run: |
+          pip install -r requirements.txt
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run browser regressions against local fixtures
+        env:
+          MOBILE_APP_URL: http://127.0.0.1:8765/mobile_app/
+          STREAMLIT_APP_URL: http://127.0.0.1:8502/
+          STUDY_APP_URL: http://127.0.0.1:8502/
+        run: |
+          python3 -m http.server 8765 --bind 127.0.0.1 > /tmp/esperanto-static-test.log 2>&1 &
+          static_pid=$!
+          streamlit run tests/fixtures/learning_app.py --server.address 127.0.0.1 --server.port 8502 --server.headless true --browser.gatherUsageStats false > /tmp/esperanto-streamlit-test.log 2>&1 &
+          study_pid=$!
+          trap 'kill "$static_pid" "$study_pid" 2>/dev/null || true' EXIT
+          python3 - <<'PY'
+          import time
+          import urllib.error
+          import urllib.request
+          for url in ("http://127.0.0.1:8765/mobile_app/", "http://127.0.0.1:8502/_stcore/health"):
+              for attempt in range(60):
+                  try:
+                      with urllib.request.urlopen(url, timeout=2) as response:
+                          if response.status == 200:
+                              break
+                  except (urllib.error.URLError, TimeoutError):
+                      pass
+                  time.sleep(0.5)
+              else:
+                  raise SystemExit(f"Local test server did not become ready: {url}")
+          PY
+          npx playwright test tests/mobile-pwa.spec.js tests/streamlit-mobile.spec.js --browser=chromium --workers=2 --reporter=line --trace=retain-on-failure
+
+      - name: Preserve browser failure details
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-regression-failures
+          path: |
+            test-results/
+            /tmp/esperanto-static-test.log
+            /tmp/esperanto-streamlit-test.log
+          retention-days: 7

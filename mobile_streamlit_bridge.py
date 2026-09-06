@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-import time
+import logging
 from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-from classic_navigation import get_classic_quiz_mode
+from quiz_navigation import get_quiz_mode
 from mobile_ranking import load_mobile_rankings_request
 from mobile_score_sync import save_mobile_score_request
+from user_progress import load_user_progress_request
+from user_settings import save_user_settings_request
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -17,37 +19,13 @@ MOBILE_AUDIO_MANIFEST = MOBILE_APP_DIR / "data" / "audio_manifest.json"
 DRIVE_AUDIO_DOWNLOAD_BASE = "https://drive.google.com/uc?export=download&id="
 COMPONENT_VOCAB_AUDIO_BASE = "./audio/"
 COMPONENT_SENTENCE_AUDIO_BASE = "./sentence-audio/"
-MOBILE_RANKING_CACHE_TTL_SEC = 120
 SUPPORTED_MOBILE_LANGS = {"ja", "zh", "ko"}
-MOBILE_CLASSIC_LINK_LABELS = {
-    "ja": "従来のStreamlit版を開く",
-    "zh": "打开传统 Streamlit 版",
-    "ko": "기존 Streamlit 버전 열기",
-}
+logger = logging.getLogger(__name__)
 
 _mobile_component = components.declare_component(
     "esperanto_mobile_pwa",
     path=str(MOBILE_APP_DIR),
 )
-
-
-TRUE_VALUES = {"1", "true", "yes", "on"}
-
-
-def _query_flag(name: str) -> bool:
-    try:
-        return str(st.query_params.get(name, "")).strip().lower() in TRUE_VALUES
-    except Exception:
-        return False
-
-
-def should_render_mobile_app(is_mobile: bool) -> bool:
-    """Use the browser-side mobile app unless the user explicitly asks for classic Streamlit."""
-    if _query_flag("classic"):
-        return False
-    if _query_flag("mobile_app"):
-        return True
-    return bool(is_mobile)
 
 
 def _mobile_audio_config() -> dict:
@@ -79,36 +57,25 @@ def _mobile_mode_from_source(source: str) -> str:
 
 
 def render_mobile_app_entry(
-    is_mobile: bool,
     *,
     source: str,
     target_lang: str | None = None,
     default_mode: str | None = None,
 ) -> bool:
-    """Render the localStorage-backed mobile app inside Streamlit Cloud.
-
-    Streamlit's built-in static file serving is intentionally limited and does not
-    serve arbitrary HTML/JS apps with browser-friendly MIME types. A local
-    Streamlit component gives us a Cloud-compatible iframe while keeping desktop
-    users on the existing app.
-    """
-    if not should_render_mobile_app(is_mobile):
-        return False
-
+    """Render one browser UI for every device, including old classic URLs."""
     lang = str(target_lang or _mobile_lang_from_source(source)).strip().lower()
     if lang not in SUPPORTED_MOBILE_LANGS:
         lang = "ja"
     fallback_mode = str(default_mode or _mobile_mode_from_source(source)).strip().lower()
     if fallback_mode not in {"vocab", "sentence"}:
         fallback_mode = "vocab"
-    mode = get_classic_quiz_mode(default=fallback_mode)
+    mode = get_quiz_mode(default=fallback_mode)
 
     st.session_state.setdefault("mobile_score_sync_result", None)
-    st.session_state.setdefault("mobile_score_sync_processed", {})
     st.session_state.setdefault("mobile_ranking_result", None)
-    st.session_state.setdefault("mobile_ranking_processed", {})
-    st.session_state.setdefault("mobile_ranking_cached_result", None)
-    st.session_state.setdefault("mobile_ranking_cache_ts", 0.0)
+    st.session_state.setdefault("mobile_progress_result", None)
+    st.session_state.setdefault("mobile_user_settings_result", None)
+    st.session_state.setdefault("mobile_processed_requests", {})
 
     st.markdown(
         """
@@ -152,52 +119,63 @@ def render_mobile_app_entry(
         },
         scoreSyncResult=st.session_state.mobile_score_sync_result,
         rankingResult=st.session_state.mobile_ranking_result,
+        progressResult=st.session_state.mobile_progress_result,
+        userSettingsResult=st.session_state.mobile_user_settings_result,
         audioConfig=_mobile_audio_config(),
         default=None,
         key=f"esperanto_mobile_pwa_{source}",
         height=900,
     )
-    if isinstance(component_value, dict) and component_value.get("type") == "save_score":
-        request_id = str(component_value.get("requestId", "")).strip()
-        processed = st.session_state.mobile_score_sync_processed
-        if request_id and request_id not in processed:
-            result = save_mobile_score_request(component_value)
-            st.session_state.mobile_score_sync_result = result
-            processed[request_id] = bool(result.get("ok"))
-            if len(processed) > 100:
-                for key in list(processed.keys())[:-100]:
-                    processed.pop(key, None)
-            st.rerun()
-    if isinstance(component_value, dict) and component_value.get("type") == "load_rankings":
-        request_id = str(component_value.get("requestId", "")).strip()
-        processed = st.session_state.mobile_ranking_processed
-        if request_id and request_id not in processed:
-            force = bool(component_value.get("force"))
-            cached = st.session_state.get("mobile_ranking_cached_result")
-            cache_age = time.time() - float(st.session_state.get("mobile_ranking_cache_ts") or 0.0)
-            if not force and isinstance(cached, dict) and cache_age < MOBILE_RANKING_CACHE_TTL_SEC:
-                result = dict(cached)
-                result["requestId"] = request_id
-            else:
-                result = load_mobile_rankings_request(component_value)
-                if result.get("ok"):
-                    st.session_state.mobile_ranking_cached_result = dict(result)
-                    st.session_state.mobile_ranking_cache_ts = time.time()
-            st.session_state.mobile_ranking_result = result
-            processed[request_id] = bool(result.get("ok"))
-            if len(processed) > 100:
-                for key in list(processed.keys())[:-100]:
-                    processed.pop(key, None)
-            st.rerun()
-    classic_label = MOBILE_CLASSIC_LINK_LABELS.get(lang, MOBILE_CLASSIC_LINK_LABELS["ja"])
-    st.markdown(
-        f"""
-        <div style="padding: 8px 12px 16px; text-align: center; font-size: 13px;">
-            <a href="?classic=1&quiz={mode}" target="_self" rel="nofollow" style="color: #075f46; font-weight: 700;">
-                {classic_label}
-            </a>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    _process_request(component_value, lang)
     return True
+
+
+def _process_request(payload, lang: str) -> None:
+    if not isinstance(payload, dict):
+        return
+    handlers = {
+        "save_score": ("mobile_score_sync_result", "score_save_result", save_mobile_score_request),
+        "load_rankings": ("mobile_ranking_result", "rankings_result", load_mobile_rankings_request),
+        "load_progress": ("mobile_progress_result", "progress_result", load_user_progress_request),
+        "save_user_settings": (
+            "mobile_user_settings_result", "user_settings_result", save_user_settings_request,
+        ),
+    }
+    request_type = payload.get("type")
+    if not isinstance(request_type, str) or request_type not in handlers:
+        return
+    request_id = payload.get("requestId")
+    if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 200:
+        return
+    processed = st.session_state.mobile_processed_requests
+    key = (request_type, request_id)
+    if key in processed:
+        return
+    state_key, result_type, handler = handlers[request_type]
+    try:
+        # Never reuse a personalized or visibility-filtered response for another request.
+        result = handler(payload)
+    except Exception:
+        logger.exception("Learning request failed: %s", request_type)
+        messages = {
+            "ja": "処理できませんでした。しばらくしてから再試行してください。",
+            "zh": "暂时无法完成操作，请稍后重试。",
+            "ko": "처리하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+        }
+        result = {
+            "type": result_type,
+            "requestId": request_id,
+            "user": payload.get("user") if isinstance(payload.get("user"), str) else "",
+            "saveId": payload.get("saveId", ""),
+            "ok": False,
+            "message": messages.get(lang, messages["ja"]),
+        }
+    st.session_state[state_key] = result
+    processed[key] = True
+    if request_type == "save_user_settings" or (request_type == "save_score" and result.get("ok")):
+        st.session_state.mobile_ranking_result = None
+        st.session_state.mobile_progress_result = None
+    if len(processed) > 100:
+        for old_key in list(processed)[:-100]:
+            processed.pop(old_key, None)
+    st.rerun()

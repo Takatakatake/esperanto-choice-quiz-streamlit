@@ -1,7 +1,6 @@
-# 上限はメジャーバージョンの破壊的更新から6アプリを守るためのガード。
+# 上限はメジャーバージョンの破壊的更新からアプリを守るためのガード。
 # 下限 streamlit>=1.30 はコードが st.query_params (dict API) を使うため。
 # 現在 Cloud で解決されるバージョンは全てこの範囲内（= 今日の挙動は不変）。
 streamlit>=1.30,<2
 pandas<3
-st-gsheets-connection<1
 gspread<7

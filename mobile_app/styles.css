@@ -1028,3 +1028,171 @@ select {
     border-radius: 8px 8px 0 0;
   }
 }
+
+.name-account-hint,
+.muted-text {
+  margin: 4px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.history-user-form {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.history-user-form > label {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.history-user-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.history-user-controls input {
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.history-user-controls button {
+  flex-shrink: 0;
+  width: auto;
+  padding: 8px 14px;
+}
+
+.personal-progress-section {
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.personal-progress-section h3,
+.device-history-section h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.progress-totals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 16px 0;
+}
+
+.progress-totals > div {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 4px;
+  border-radius: 6px;
+  background: var(--primary-soft);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.progress-totals span {
+  font-size: 13px;
+  color: var(--primary-strong);
+}
+
+.progress-totals strong {
+  font-size: clamp(16px, 4.2vw, 23px);
+  color: var(--primary-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-breakdown h4 {
+  margin: 16px 0 6px;
+  font-size: 15px;
+}
+
+.progress-category-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.progress-category-row span {
+  overflow-wrap: anywhere;
+}
+
+.progress-category-row strong {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-breakdown summary {
+  cursor: pointer;
+}
+
+.progress-breakdown summary .progress-category-row {
+  display: inline-flex;
+  width: calc(100% - 24px);
+}
+
+.progress-breakdown details > .progress-category-row {
+  padding-left: 24px;
+  color: var(--muted);
+}
+
+.ranking-privacy-settings {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.ranking-privacy-settings .toggle-row {
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.device-history-section {
+  margin-top: 22px;
+}
+
+.device-history-section .section-title-row {
+  align-items: flex-start;
+}
+
+.history-sync-status {
+  font-size: 12px;
+}
+
+.is-error {
+  color: var(--danger);
+}
+
+button:disabled,
+input:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.legacy-notice {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--primary-soft);
+  font-size: 14px;
+}
+
+.legacy-notice p {
+  margin: 6px 0 12px;
+}

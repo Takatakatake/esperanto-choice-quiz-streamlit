@@ -7,6 +7,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Esperanto Quiz">
     <title>Esperanto Quiz</title>
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="stylesheet" href="./styles.css">
   </head>
@@ -37,6 +38,12 @@
             <button id="modeSentence" type="button" role="tab" aria-selected="false">例文</button>
           </div>
 
+          <div id="legacyNotice" class="legacy-notice" hidden>
+            <strong id="legacyNoticeTitle">旧版の学習データがあります</strong>
+            <p id="legacyNoticeMessage"></p>
+            <button id="legacyImportButton" class="secondary-action" type="button">この画面に引き継ぐ</button>
+          </div>
+
           <div id="resumeNotice" class="resume-notice" hidden>
             <div>
               <strong>保存されたクイズがあります</strong>
@@ -48,7 +55,8 @@
           <form id="setupForm" class="setup-form">
             <div class="form-row">
               <label for="userName">ユーザー名</label>
-              <input id="userName" name="userName" autocomplete="nickname" inputmode="text" maxlength="32">
+              <input id="userName" name="userName" autocomplete="nickname" inputmode="text" aria-describedby="setupNameHint">
+              <p id="setupNameHint" class="name-account-hint"></p>
             </div>
 
             <div class="form-row">
@@ -161,9 +169,32 @@
 
         <section id="historyView" class="state-view history-view">
           <div class="section-title-row">
-            <h2>成績</h2>
-            <button id="clearHistoryButton" class="text-button" type="button">端末履歴のみ消去</button>
+            <h2>学習記録</h2>
           </div>
+          <form id="historyUserForm" class="history-user-form">
+            <label for="historyUserName">ユーザー名</label>
+            <div class="history-user-controls">
+              <input id="historyUserName" autocomplete="nickname" aria-describedby="historyNameHint">
+              <button id="historyUserButton" class="secondary-action" type="submit">記録を見る</button>
+            </div>
+            <p id="historyNameHint" class="name-account-hint"></p>
+          </form>
+          <section class="personal-progress-section" aria-labelledby="progressTitle">
+            <div class="ranking-title-row">
+              <h3 id="progressTitle">自分の累積得点</h3>
+              <button id="progressRefreshButton" class="text-button" type="button">更新</button>
+            </div>
+            <p id="progressStatus" class="muted-text" role="status" aria-live="polite"></p>
+            <div id="progressContent"></div>
+            <div class="ranking-privacy-settings">
+              <label class="toggle-row">
+                <input id="rankingPublic" type="checkbox" disabled aria-describedby="rankingPrivacyHint rankingSettingsStatus">
+                <span id="rankingPublicLabel">ランキングに表示する</span>
+              </label>
+              <p id="rankingPrivacyHint" class="muted-text"></p>
+              <p id="rankingSettingsStatus" class="muted-text" role="status" aria-live="polite"></p>
+            </div>
+          </section>
           <section id="cloudRankingSection" class="cloud-ranking-section" aria-labelledby="cloudRankingTitle">
             <div class="ranking-title-row">
               <div>
@@ -180,7 +211,16 @@
             </div>
             <div id="rankingList" class="ranking-list"></div>
           </section>
-          <div id="historyList" class="history-list"></div>
+          <section class="device-history-section" aria-labelledby="deviceHistoryTitle">
+            <div class="section-title-row">
+              <h3 id="deviceHistoryTitle">端末履歴</h3>
+              <button id="clearHistoryButton" class="text-button" type="button">端末履歴のみ消去</button>
+            </div>
+            <p id="deviceHistoryHint" class="muted-text"></p>
+            <p id="outboxStatus" class="muted-text" role="status" aria-live="polite"></p>
+            <button id="retryPendingButton" class="secondary-action" type="button" hidden>未送信の記録を再送</button>
+            <div id="historyList" class="history-list"></div>
+          </section>
         </section>
 
         <section id="diagnosticsView" class="state-view diagnostics-view">
@@ -202,24 +242,18 @@
         <div class="app-link-group">
           <span id="languageLinksLabel">言語</span>
           <div class="app-link-row">
-            <a id="jaAppLink" href="https://esperanto-quiz.streamlit.app/?mobile_app=1" target="_blank" rel="noopener noreferrer">日本語</a>
-            <a id="zhAppLink" href="https://esperanto-quiz-zh.streamlit.app/?mobile_app=1" target="_blank" rel="noopener noreferrer">中文</a>
-            <a id="koAppLink" href="https://esperanto-quiz-ko.streamlit.app/?mobile_app=1" target="_blank" rel="noopener noreferrer">한국어</a>
+            <a id="jaAppLink" href="https://esperanto-quiz.streamlit.app/" target="_blank" rel="noopener noreferrer">日本語</a>
+            <a id="zhAppLink" href="https://esperanto-quiz-zh.streamlit.app/" target="_blank" rel="noopener noreferrer">中文</a>
+            <a id="koAppLink" href="https://esperanto-quiz-ko.streamlit.app/" target="_blank" rel="noopener noreferrer">한국어</a>
           </div>
         </div>
-        <div class="app-link-group">
-          <span id="versionLinksLabel">表示</span>
-          <div class="app-link-row version-link-row">
-            <a id="mobileAppLink" href="?mobile_app=1" target="_blank" rel="noopener noreferrer nofollow">スマホ版</a>
-            <a id="classicAppLink" href="?classic=1" target="_blank" rel="noopener noreferrer nofollow">PC版</a>
-          </div>
-        </div>
+
       </footer>
 
       <nav class="bottom-nav" aria-label="メイン">
         <button id="homeNav" class="is-selected" type="button">ホーム</button>
         <button id="quizNav" type="button">クイズ</button>
-        <button id="historyNav" type="button">成績</button>
+        <button id="historyNav" type="button">学習記録</button>
         <button id="diagnosticsNav" type="button">診断</button>
       </nav>
 

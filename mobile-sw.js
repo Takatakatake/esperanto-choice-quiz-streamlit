@@ -1,4 +1,4 @@
-const CACHE_VERSION = "esperanto-mobile-pwa-2026-06-11-grammar-round6";
+const CACHE_VERSION = "esperanto-mobile-pwa-2026-09-06-unified-learning-2";
 const APP_CACHE = `${CACHE_VERSION}:app`;
 const RUNTIME_CACHE = `${CACHE_VERSION}:runtime`;
 const RUNTIME_CACHE_MAX_ENTRIES = 400;
@@ -8,6 +8,9 @@ const APP_SHELL = [
   "./mobile_app/styles.css",
   "./mobile_app/app.js",
   "./mobile_app/quiz_core.mjs",
+  "./mobile_app/quiz_questions.mjs",
+  "./mobile_app/learning_sync.mjs",
+  "./mobile_app/legacy_session_migration.mjs",
   "./mobile_app/manifest.webmanifest",
   "./mobile_app/icon.svg",
   "./mobile_app/data/vocab.json",
@@ -28,7 +31,7 @@ self.addEventListener("activate", (event) => {
     caches.keys()
       .then((keys) => Promise.all(
         keys
-          .filter((key) => !key.startsWith(CACHE_VERSION))
+          .filter((key) => key.startsWith("esperanto-mobile-pwa-") && !key.startsWith(CACHE_VERSION))
           .map((key) => caches.delete(key)),
       ))
       .then(() => self.clients.claim()),

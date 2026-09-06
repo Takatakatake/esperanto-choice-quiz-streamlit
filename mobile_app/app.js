@@ -5,11 +5,17 @@ import {
   scoreForCorrect,
 } from "./quiz_core.mjs";
 
-const APP_VERSION = "2026-06-11-grammar-round6";
+import { buildLocalizedQuestion } from "./quiz_questions.mjs";
+import { inspectLegacySession, commitLegacySessionImport, hasClassicMigrationProvenance, isLegacyScoreSaveBlocked } from "./legacy_session_migration.mjs";
+import { addToOutbox, matchesAccountResult, filterUserHistory, SerializedBridge, DurableScoreOutbox, canReplaceSession, persistPresentSession, isAccountCacheFresh, matchesScoreRecord, scoreRecordFromSession, hasConfirmedScoreEvidence } from "./learning_sync.mjs";
+
+const APP_VERSION = "2026-09-06-unified-learning-2";
 const STORAGE_PREFIX = "esperanto-choice-mobile";
 const SESSION_KEY = `${STORAGE_PREFIX}:session:v2`;
 const SETTINGS_KEY = `${STORAGE_PREFIX}:settings:v2`;
 const HISTORY_KEY = `${STORAGE_PREFIX}:history:v2`;
+const OUTBOX_KEY = `${STORAGE_PREFIX}:outbox:v1`;
+const OUTBOX_ENTRY_PREFIX = `${STORAGE_PREFIX}:outbox:v2:`;
 
 const DATA_URLS = {
   vocab: "./data/vocab.json",
@@ -37,7 +43,6 @@ const PUBLIC_APP_URLS = {
 const HISTORY_MAX_ITEMS = 100;
 const HISTORY_RECOVERY_LIMITS = [50, 20, 5, 0];
 const RANKING_CACHE_TTL_MS = 120000;
-const RANKING_REQUEST_TIMEOUT_MS = 20000;
 const SCORE_SYNC_RETRY_DELAY_MS = 10000;
 const SCORE_SYNC_AUTO_RETRY_MAX = 3;
 const SUPPORTED_TARGET_LANGS = new Set(["ja", "zh", "ko"]);
@@ -54,6 +59,17 @@ const TARGET_LANG_META = {
     wordUnit: "語",
     pointUnit: "点",
     labels: {
+      legacyViewOnly: "旧版の結果（閲覧のみ）",
+      legacyUnknownSaveHint: "旧版の保存状況を確認できないため、この結果は閲覧のみで引き継ぎます。重複加算を防ぐため再送は行いません。",
+      rankingVisibilityUpdating: "公開設定を確認してからランキングを更新します。",
+      saveBeforeNewQuiz: "この結果の未送信データを保存できていません。結果を保持しました。保存を再試行してから新しいクイズを始めてください。",
+      legacyTitle: "旧版の学習データがあります",
+      legacyImport: "この画面に引き継ぐ",
+      legacyResumeHint: "保存されていた問題と得点を引き継いで再開できます。旧版の保存データも残ります。",
+      legacyCompleteHint: "完了したクイズを引き継げます。未送信の得点は、元の名前の学習記録に自動保存します。旧版の保存データも残ります。",
+      legacyUnsupported: "旧版の保存データは保持されていますが、自動で引き継げない形式です。現在のクイズには影響しません。",
+      legacyImportFailed: "データの変更、または端末への保存失敗のため引き継げませんでした。再読み込みして確認してください。",
+      legacyImported: "旧版の問題と得点を引き継ぎました。",
       loading: "データを読み込んでいます",
       ready: "準備完了",
       userName: "ユーザー名",
@@ -78,11 +94,11 @@ const TARGET_LANG_META = {
       accuracy: "正答率",
       points: "得点",
       correct: "正解",
-      saveRanking: "ランキングに保存",
+      saveRanking: "学習記録を保存",
       retry: "同じ設定でもう一度",
       newQuiz: "新しいクイズ",
       review: "復習",
-      history: "成績",
+      history: "学習記録",
       clearHistory: "端末履歴のみ消去",
       ranking: "ランキング",
       rankingBeforeLoad: "読み込み前",
@@ -95,21 +111,18 @@ const TARGET_LANG_META = {
       reload: "再読み込み",
       navHome: "ホーム",
       navQuiz: "クイズ",
-      navHistory: "成績",
+      navHistory: "学習記録",
       navDiagnostics: "診断",
       languageLinks: "言語",
-      displayLinks: "表示",
-      mobileVersion: "スマホ版",
-      classicVersion: "PC版",
       loadFailed: "読み込みに失敗しました",
       next: "次へ",
       unknown: "不明",
       none: "なし",
       error: "エラー",
       dataShortage: "クイズデータが不足しています。",
-      clearHistoryConfirm: "この端末内の成績履歴だけを消去します。Google Sheetsのランキングや累積得点、進行中のクイズは消えません。実行しますか？",
-      clearHistoryDone: "端末内の成績履歴だけを消去しました。ランキングは消えていません。",
-      scoreSavedMessage: "ランキングに保存しました。",
+      clearHistoryConfirm: "この名前の端末内の履歴だけを消去します。累積得点、未送信の記録、進行中のクイズは消えません。実行しますか？",
+      clearHistoryDone: "この名前の端末履歴だけを消去しました。累積得点と未送信の記録は残っています。",
+      scoreSavedMessage: "学習記録を保存しました。",
       scoreSaveFailedMessage: "保存に失敗しました。",
       rankingUpdatedMessage: "ランキングを表示しました。",
       rankingFailedMessage: "ランキングを取得できませんでした。",
@@ -120,7 +133,7 @@ const TARGET_LANG_META = {
       sessionCleanupToast: "端末保存容量が足りないため、成績履歴を整理してクイズ状態を保存しました。",
       autoSaved: "自動保存済み",
       sessionDiscarded: "進行中のクイズを破棄しました",
-      rankingUnavailable: "ランキング表示はStreamlit Cloud版で利用できます。",
+      rankingUnavailable: "ランキングはオンライン版で利用できます。",
       rankingLoading: "ランキングを読み込んでいます。",
       rankingTimeout: "ランキングの読み込みに時間がかかっています。通信状態を確認して、更新を押してください。",
       replaceActiveConfirm: "進行中のクイズがあります。現在の進行を終了して、新しいクイズを開始しますか？",
@@ -131,20 +144,20 @@ const TARGET_LANG_META = {
       remaining: "残り",
       choiceAudioAria: "選択肢の音声を再生",
       incorrectPrefix: "不正解。正解",
-      scoreUnavailable: "ランキング保存はStreamlit Cloud版で利用できます。",
-      scoreNeedsUser: "ユーザー名を入力して開始するとランキングに保存できます。",
+      scoreUnavailable: "アカウントへの記録保存はオンライン版で利用できます。",
+      scoreNeedsUser: "名前を入力して始めたクイズは、完了時に学習記録を自動保存します。",
       scoreSaving: "保存中...",
-      scoreSavingMessage: "Google Sheetsへ保存しています。",
-      scoreSavedButton: "ランキング保存済み",
-      scoreSavedAdd: "今回の{points}点を加算しました。",
+      scoreSavingMessage: "学習記録を保存しています。",
+      scoreSavedButton: "学習記録を保存済み",
+      scoreSavedAdd: "今回の{points}点を学習記録に加算しました。",
       scoreRetryTotals: "累積得点を再更新",
       scoreRetryMessage: "保存に失敗しました。もう一度お試しください。",
-      scoreWillAdd: "Google Sheetsの累積得点へ{points}点を加算します。",
+      scoreWillAdd: "今回の{points}点を学習記録に保存します。",
       scoreUserRequired: "保存するにはユーザー名が必要です。",
-      scoreRetryLimit: "保存結果を確認できませんでした。通信状態を確認して、もう一度「ランキングに保存」を押してください。",
-      scoreAutoRetry: "前回の保存結果を確認できなかったため、同じ保存IDで安全に再送しています。",
+      scoreRetryLimit: "保存結果を確認できませんでした。通信を確認して「学習記録を保存」または学習記録画面の再送を押してください。",
+      scoreAutoRetry: "通信を確認しながら自動で再送します。同じ記録は重複加算しません。",
       noWrongTitle: "間違えた問題はありません",
-      noWrongBody: "この結果は端末内の成績に保存されています。",
+      noWrongBody: "この結果は端末内の学習記録に保存されています。",
       reviewAudioAria: "エスペラント正解の音声を再生",
       answer: "回答",
       rankingRetry: "再試行",
@@ -154,8 +167,8 @@ const TARGET_LANG_META = {
       rankingSecretHint: "Streamlit CloudのSecrets設定とGoogle Sheets共有権限を確認してください。",
       rankingEmpty: "{tab}のランキングはまだありません。",
       currentUser: "あなた",
-      historyEmptyTitle: "成績はまだありません",
-      historyEmptyBody: "クイズを完了するとここに残ります。",
+      historyEmptyTitle: "この名前の端末履歴はありません",
+      historyEmptyBody: "この端末でクイズを完了すると、ここに表示されます。",
       noStoredQuiz: "保存中のクイズなし",
       appVersion: "アプリ版",
       runtime: "実行形式",
@@ -209,6 +222,38 @@ const TARGET_LANG_META = {
       ariaRankingTabs: "ランキング種別",
       ariaLinks: "関連リンク",
       ariaMainNav: "メイン",
+      personalProgress: "自分の累積得点",
+      showRecords: "記録を見る",
+      rankingPublic: "ランキングに表示する",
+      rankingPrivacyHint: "オフにするとランキング一覧に掲載されません。学習記録の保存と、名前による閲覧は引き続き利用できます。",
+      nameAccountHint: "パスワードは不要です。同じ名前を入力した人は誰でも、記録の閲覧・追加と公開設定の変更ができます。",
+      deviceHistoryHint: "この端末の直近100件から、入力した名前の履歴を表示します。累積得点と未送信の記録は、履歴を消去しても残ります。",
+      progressNeedsUser: "名前を入力すると、その名前の学習記録を確認できます。",
+      progressUnavailable: "累積得点と公開設定はオンライン版で利用できます。",
+      progressPrompt: "更新を押すと学習記録を読み込みます。",
+      progressLoading: "学習記録を読み込んでいます。",
+      progressReady: "保存された学習記録を表示しています。",
+      progressFailed: "学習記録を取得できませんでした。通信を確認して更新してください。",
+      progressEmpty: "この分野の保存済み記録はまだありません。",
+      allFields: "全体",
+      vocabBreakdown: "単語・品詞別",
+      sentenceBreakdown: "例文・テーマ別",
+      uncategorized: "未分類",
+      settingsNotLoaded: "公開設定を確認してから変更できます。",
+      settingsSaving: "公開設定を保存しています。",
+      settingsSaved: "公開設定を保存しました。",
+      settingsFailed: "公開設定を保存できませんでした。更新して確認してください。",
+      settingsUnconfirmed: "公開設定の保存結果を確認できませんでした。更新して現在の設定を確認してください。",
+      connectionRetry: "通信状態を確認して、もう一度更新してください。",
+      retryPending: "未送信の記録を再送",
+      pendingRecords: "未送信・確認待ちの記録：{count}件。再開後や通信の復帰時にも再送します。",
+      recordSaved: "アカウントに保存済み",
+      recordPending: "アカウントへの保存を確認中",
+      recordUnsent: "未送信・再送できます",
+      recordLocal: "端末のみ",
+      recordUnknown: "以前の端末履歴・送信状況不明",
+      outboxReadFailed: "一部の未送信の記録を読み取れません。端末の保存データを保持しています。保存領域の設定を確認して再読み込みしてください。",
+      outboxWriteFailed: "未送信の記録を端末に保存できませんでした。保存領域を確認し、この結果画面で再試行してください。",
     },
   },
   zh: {
@@ -222,6 +267,17 @@ const TARGET_LANG_META = {
     wordUnit: "词",
     pointUnit: "分",
     labels: {
+      legacyViewOnly: "旧版结果（仅查看）",
+      legacyUnknownSaveHint: "无法确认旧版的保存状态，此结果只能查看。为防止重复计分，不会重发。",
+      rankingVisibilityUpdating: "确认公开设置后将更新排行榜。",
+      saveBeforeNewQuiz: "待发送结果尚未安全保存，当前结果已保留。请重试保存后再开始新测验。",
+      legacyTitle: "发现旧版学习数据",
+      legacyImport: "导入到此界面",
+      legacyResumeHint: "可以保留原题目和得分继续测验。旧版数据也会保留。",
+      legacyCompleteHint: "可以导入已完成的测验。尚未发送的得分会自动保存到原用户名下，旧版数据也会保留。",
+      legacyUnsupported: "旧版数据已保留，但此格式无法自动导入，不影响当前测验。",
+      legacyImportFailed: "数据已变更或本机保存失败，无法导入。请重新加载后确认。",
+      legacyImported: "已导入旧版题目和得分。",
       loading: "正在读取数据",
       ready: "准备就绪",
       userName: "用户名",
@@ -246,11 +302,11 @@ const TARGET_LANG_META = {
       accuracy: "正确率",
       points: "得分",
       correct: "答对",
-      saveRanking: "保存到排行榜",
+      saveRanking: "保存学习记录",
       retry: "用相同设置再做一次",
       newQuiz: "新测验",
       review: "复习",
-      history: "成绩",
+      history: "学习记录",
       clearHistory: "仅清除本机记录",
       ranking: "排行榜",
       rankingBeforeLoad: "尚未读取",
@@ -263,21 +319,18 @@ const TARGET_LANG_META = {
       reload: "重新读取",
       navHome: "主页",
       navQuiz: "测验",
-      navHistory: "成绩",
+      navHistory: "学习记录",
       navDiagnostics: "诊断",
       languageLinks: "语言",
-      displayLinks: "显示",
-      mobileVersion: "手机版",
-      classicVersion: "电脑版",
       loadFailed: "读取失败",
       next: "下一题",
       unknown: "未知",
       none: "无",
       error: "错误",
       dataShortage: "测验数据不足。",
-      clearHistoryConfirm: "只清除这台设备内的成绩记录。Google Sheets 排行榜、累计得分和正在进行的测验不会被删除。确定要清除吗？",
-      clearHistoryDone: "仅清除了本机成绩记录，排行榜没有被删除。",
-      scoreSavedMessage: "已保存到排行榜。",
+      clearHistoryConfirm: "仅清除此用户名在本机的记录。累计得分、待发送记录和进行中的测验不会被删除。继续吗？",
+      clearHistoryDone: "已清除此用户名的本机记录。累计得分和待发送记录仍然保留。",
+      scoreSavedMessage: "已保存学习记录。",
       scoreSaveFailedMessage: "保存失败。",
       rankingUpdatedMessage: "排行榜已显示。",
       rankingFailedMessage: "无法获取排行榜。",
@@ -288,7 +341,7 @@ const TARGET_LANG_META = {
       sessionCleanupToast: "本机存储空间不足，已清理成绩记录并保存了测验状态。",
       autoSaved: "已自动保存",
       sessionDiscarded: "已丢弃进行中的测验",
-      rankingUnavailable: "排行榜显示可在 Streamlit Cloud 版使用。",
+      rankingUnavailable: "在线版可查看排行榜。",
       rankingLoading: "正在读取排行榜。",
       rankingTimeout: "排行榜读取耗时较长。请检查网络状态后点击更新。",
       replaceActiveConfirm: "有进行中的测验。要结束当前进度并开始新测验吗？",
@@ -299,20 +352,20 @@ const TARGET_LANG_META = {
       remaining: "剩余",
       choiceAudioAria: "播放选项音频",
       incorrectPrefix: "答错了。正确答案",
-      scoreUnavailable: "排行榜保存可在 Streamlit Cloud 版使用。",
-      scoreNeedsUser: "输入用户名并开始后即可保存到排行榜。",
+      scoreUnavailable: "在线版可将记录保存到用户名下。",
+      scoreNeedsUser: "输入用户名后开始测验，完成时会自动保存学习记录。",
       scoreSaving: "保存中...",
-      scoreSavingMessage: "正在保存到 Google Sheets。",
-      scoreSavedButton: "已保存到排行榜",
-      scoreSavedAdd: "本次已加上 {points} 分。",
+      scoreSavingMessage: "正在保存学习记录。",
+      scoreSavedButton: "学习记录已保存",
+      scoreSavedAdd: "已将本次{points}分加入学习记录。",
       scoreRetryTotals: "重新更新累计得分",
       scoreRetryMessage: "保存失败。请再试一次。",
-      scoreWillAdd: "将向 Google Sheets 累计得分加上 {points} 分。",
+      scoreWillAdd: "将本次{points}分保存到学习记录。",
       scoreUserRequired: "保存需要用户名。",
-      scoreRetryLimit: "无法确认保存结果。请检查网络状态后再次点击“保存到排行榜”。",
-      scoreAutoRetry: "无法确认上次保存结果，因此正在使用同一保存ID安全重试。",
+      scoreRetryLimit: "无法确认保存结果。请检查网络，然后点击保存学习记录或在学习记录页重发。",
+      scoreAutoRetry: "正在等待网络恢复并自动重发，同一记录不会重复计分。",
       noWrongTitle: "没有答错的题目",
-      noWrongBody: "这个结果已保存到本机成绩。",
+      noWrongBody: "此结果已保存在本机学习记录中。",
       reviewAudioAria: "播放世界语正确答案音频",
       answer: "回答",
       rankingRetry: "重试",
@@ -322,8 +375,8 @@ const TARGET_LANG_META = {
       rankingSecretHint: "请检查 Streamlit Cloud 的 Secrets 设置和 Google Sheets 共享权限。",
       rankingEmpty: "{tab}排行榜还没有数据。",
       currentUser: "你",
-      historyEmptyTitle: "还没有成绩",
-      historyEmptyBody: "完成测验后会显示在这里。",
+      historyEmptyTitle: "此用户名在本机没有记录",
+      historyEmptyBody: "在本机完成测验后会显示在这里。",
       noStoredQuiz: "没有已保存的测验",
       appVersion: "应用版本",
       runtime: "运行形式",
@@ -377,6 +430,38 @@ const TARGET_LANG_META = {
       ariaRankingTabs: "排行榜类型",
       ariaLinks: "相关链接",
       ariaMainNav: "主导航",
+      personalProgress: "我的累计得分",
+      showRecords: "查看记录",
+      rankingPublic: "在排行榜中显示",
+      rankingPrivacyHint: "关闭后不会显示在排行榜中。仍可保存学习记录，并通过用户名查看。",
+      nameAccountHint: "无需密码。任何输入相同用户名的人都能查看、添加记录和更改公开设置。",
+      deviceHistoryHint: "从本机最近100条记录中显示此用户名的记录。清除本机记录不会删除累计得分或待发送记录。",
+      progressNeedsUser: "输入用户名即可查看该用户名的学习记录。",
+      progressUnavailable: "在线版可查看累计得分和更改公开设置。",
+      progressPrompt: "点击更新读取学习记录。",
+      progressLoading: "正在读取学习记录。",
+      progressReady: "正在显示已保存的学习记录。",
+      progressFailed: "无法读取学习记录。请检查网络后更新。",
+      progressEmpty: "此领域还没有已保存的记录。",
+      allFields: "全部",
+      vocabBreakdown: "单词・按词性",
+      sentenceBreakdown: "例句・按主题",
+      uncategorized: "未分类",
+      settingsNotLoaded: "读取公开设置后即可更改。",
+      settingsSaving: "正在保存公开设置。",
+      settingsSaved: "已保存公开设置。",
+      settingsFailed: "无法保存公开设置。请更新后确认。",
+      settingsUnconfirmed: "无法确认公开设置是否已保存。请更新以查看当前设置。",
+      connectionRetry: "请检查网络后再次更新。",
+      retryPending: "重发待发送记录",
+      pendingRecords: "待发送或待确认：{count}条。重新打开或网络恢复时也会重发。",
+      recordSaved: "已保存到用户名下",
+      recordPending: "正在确认保存结果",
+      recordUnsent: "尚未发送・可重发",
+      recordLocal: "仅本机",
+      recordUnknown: "旧的本机记录・发送状态未知",
+      outboxReadFailed: "无法读取部分待发送记录，原数据已保留。请检查本机存储设置后重新加载。",
+      outboxWriteFailed: "无法在本机保存待发送记录。请检查存储空间，并在此结果页重试。",
     },
   },
   ko: {
@@ -390,6 +475,17 @@ const TARGET_LANG_META = {
     wordUnit: "단어",
     pointUnit: "점",
     labels: {
+      legacyViewOnly: "이전 결과(보기 전용)",
+      legacyUnknownSaveHint: "이전 저장 상태를 확인할 수 없어 이 결과는 보기 전용으로 가져옵니다. 중복 합산을 막기 위해 재전송하지 않습니다.",
+      rankingVisibilityUpdating: "공개 설정을 확인한 후 랭킹을 업데이트합니다.",
+      saveBeforeNewQuiz: "미전송 결과를 저장하지 못해 현재 결과를 유지했습니다. 저장을 다시 시도한 후 새 퀴즈를 시작해 주세요.",
+      legacyTitle: "이전 버전의 학습 데이터가 있습니다",
+      legacyImport: "이 화면으로 가져오기",
+      legacyResumeHint: "저장된 문제와 점수를 유지하여 이어서 풀 수 있습니다. 이전 데이터도 보존됩니다.",
+      legacyCompleteHint: "완료된 퀴즈를 가져올 수 있습니다. 미전송 점수는 원래 이름의 학습 기록에 자동 저장되며 이전 데이터도 보존됩니다.",
+      legacyUnsupported: "이전 데이터는 보존되었지만 이 형식은 자동으로 가져올 수 없습니다. 현재 퀴즈에는 영향이 없습니다.",
+      legacyImportFailed: "데이터가 변경되었거나 기기에 저장하지 못해 가져올 수 없습니다. 다시 불러와서 확인해 주세요.",
+      legacyImported: "이전 버전의 문제와 점수를 가져왔습니다.",
       loading: "데이터를 불러오는 중입니다",
       ready: "준비 완료",
       userName: "사용자 이름",
@@ -414,11 +510,11 @@ const TARGET_LANG_META = {
       accuracy: "정답률",
       points: "점수",
       correct: "정답",
-      saveRanking: "랭킹에 저장",
+      saveRanking: "학습 기록 저장",
       retry: "같은 설정으로 다시",
       newQuiz: "새 퀴즈",
       review: "복습",
-      history: "성적",
+      history: "학습 기록",
       clearHistory: "기기 기록만 삭제",
       ranking: "랭킹",
       rankingBeforeLoad: "불러오기 전",
@@ -431,21 +527,18 @@ const TARGET_LANG_META = {
       reload: "다시 불러오기",
       navHome: "홈",
       navQuiz: "퀴즈",
-      navHistory: "성적",
+      navHistory: "학습 기록",
       navDiagnostics: "진단",
       languageLinks: "언어",
-      displayLinks: "표시",
-      mobileVersion: "모바일판",
-      classicVersion: "PC판",
       loadFailed: "불러오기에 실패했습니다",
       next: "다음",
       unknown: "알 수 없음",
       none: "없음",
       error: "오류",
       dataShortage: "퀴즈 데이터가 부족합니다.",
-      clearHistoryConfirm: "이 기기 안의 성적 기록만 삭제합니다. Google Sheets 랭킹, 누적 점수, 진행 중인 퀴즈는 삭제되지 않습니다. 실행할까요?",
-      clearHistoryDone: "기기 내 성적 기록만 삭제했습니다. 랭킹은 삭제되지 않았습니다.",
-      scoreSavedMessage: "랭킹에 저장했습니다.",
+      clearHistoryConfirm: "이 이름의 기기 기록만 지웁니다. 누적 점수, 미전송 기록, 진행 중인 퀴즈는 남습니다. 계속할까요?",
+      clearHistoryDone: "이 이름의 기기 기록만 지웠습니다. 누적 점수와 미전송 기록은 남아 있습니다.",
+      scoreSavedMessage: "학습 기록을 저장했습니다.",
       scoreSaveFailedMessage: "저장에 실패했습니다.",
       rankingUpdatedMessage: "랭킹을 표시했습니다.",
       rankingFailedMessage: "랭킹을 가져오지 못했습니다.",
@@ -456,7 +549,7 @@ const TARGET_LANG_META = {
       sessionCleanupToast: "기기 저장 공간이 부족하여 성적 기록을 정리하고 퀴즈 상태를 저장했습니다.",
       autoSaved: "자동 저장됨",
       sessionDiscarded: "진행 중인 퀴즈를 폐기했습니다",
-      rankingUnavailable: "랭킹 표시는 Streamlit Cloud 버전에서 사용할 수 있습니다.",
+      rankingUnavailable: "랭킹은 온라인 버전에서 볼 수 있습니다.",
       rankingLoading: "랭킹을 불러오는 중입니다.",
       rankingTimeout: "랭킹을 불러오는 데 시간이 걸리고 있습니다. 통신 상태를 확인한 뒤 새로고침을 누르세요.",
       replaceActiveConfirm: "진행 중인 퀴즈가 있습니다. 현재 진행을 끝내고 새 퀴즈를 시작할까요?",
@@ -467,20 +560,20 @@ const TARGET_LANG_META = {
       remaining: "남음",
       choiceAudioAria: "선택지 음성 재생",
       incorrectPrefix: "오답. 정답",
-      scoreUnavailable: "랭킹 저장은 Streamlit Cloud 버전에서 사용할 수 있습니다.",
-      scoreNeedsUser: "사용자 이름을 입력하고 시작하면 랭킹에 저장할 수 있습니다.",
+      scoreUnavailable: "온라인 버전에서 계정에 기록을 저장할 수 있습니다.",
+      scoreNeedsUser: "이름을 입력하고 시작한 퀴즈는 완료 시 학습 기록이 자동 저장됩니다.",
       scoreSaving: "저장 중...",
-      scoreSavingMessage: "Google Sheets에 저장하고 있습니다.",
-      scoreSavedButton: "랭킹 저장 완료",
-      scoreSavedAdd: "이번에 얻은 {points}점을 더했습니다.",
+      scoreSavingMessage: "학습 기록을 저장하고 있습니다.",
+      scoreSavedButton: "학습 기록 저장 완료",
+      scoreSavedAdd: "이번 {points}점을 학습 기록에 더했습니다.",
       scoreRetryTotals: "누적 점수 다시 업데이트",
       scoreRetryMessage: "저장에 실패했습니다. 다시 시도해 주세요.",
-      scoreWillAdd: "Google Sheets 누적 점수에 {points}점을 더합니다.",
+      scoreWillAdd: "이번 {points}점을 학습 기록에 저장합니다.",
       scoreUserRequired: "저장하려면 사용자 이름이 필요합니다.",
-      scoreRetryLimit: "저장 결과를 확인할 수 없었습니다. 통신 상태를 확인하고 다시 “랭킹에 저장”을 누르세요.",
-      scoreAutoRetry: "이전 저장 결과를 확인하지 못해 같은 저장 ID로 안전하게 재전송합니다.",
+      scoreRetryLimit: "저장 결과를 확인하지 못했습니다. 연결을 확인하고 학습 기록 저장 또는 학습 기록 화면의 재전송을 눌러 주세요.",
+      scoreAutoRetry: "연결을 확인하며 자동으로 재전송합니다. 같은 기록은 중복 합산되지 않습니다.",
       noWrongTitle: "틀린 문제가 없습니다",
-      noWrongBody: "이 결과는 기기 내 성적에 저장되었습니다.",
+      noWrongBody: "이 결과는 기기의 학습 기록에 저장되어 있습니다.",
       reviewAudioAria: "에스페란토 정답 음성 재생",
       answer: "선택",
       rankingRetry: "재시도",
@@ -490,8 +583,8 @@ const TARGET_LANG_META = {
       rankingSecretHint: "Streamlit Cloud Secrets 설정과 Google Sheets 공유 권한을 확인하세요.",
       rankingEmpty: "{tab} 랭킹은 아직 없습니다.",
       currentUser: "나",
-      historyEmptyTitle: "아직 성적이 없습니다",
-      historyEmptyBody: "퀴즈를 완료하면 여기에 기록됩니다.",
+      historyEmptyTitle: "이 이름의 기기 기록이 없습니다",
+      historyEmptyBody: "이 기기에서 퀴즈를 완료하면 여기에 표시됩니다.",
       noStoredQuiz: "저장된 퀴즈 없음",
       appVersion: "앱 버전",
       runtime: "실행 환경",
@@ -545,6 +638,38 @@ const TARGET_LANG_META = {
       ariaRankingTabs: "랭킹 종류",
       ariaLinks: "관련 링크",
       ariaMainNav: "메인",
+      personalProgress: "나의 누적 점수",
+      showRecords: "기록 보기",
+      rankingPublic: "랭킹에 표시하기",
+      rankingPrivacyHint: "끄면 랭킹 목록에 표시되지 않습니다. 학습 기록 저장과 이름으로 조회하는 기능은 계속 사용할 수 있습니다.",
+      nameAccountHint: "비밀번호는 필요 없습니다. 같은 이름을 입력하면 누구나 기록 조회·추가 및 공개 설정 변경을 할 수 있습니다.",
+      deviceHistoryHint: "이 기기의 최근 100건 중 입력한 이름의 기록을 표시합니다. 기록을 지워도 누적 점수와 미전송 기록은 남습니다.",
+      progressNeedsUser: "이름을 입력하면 해당 이름의 학습 기록을 볼 수 있습니다.",
+      progressUnavailable: "누적 점수와 공개 설정은 온라인 버전에서 사용할 수 있습니다.",
+      progressPrompt: "새로고침을 누르면 학습 기록을 불러옵니다.",
+      progressLoading: "학습 기록을 불러오고 있습니다.",
+      progressReady: "저장된 학습 기록을 표시합니다.",
+      progressFailed: "학습 기록을 불러오지 못했습니다. 연결을 확인하고 새로고침해 주세요.",
+      progressEmpty: "이 분야에는 아직 저장된 기록이 없습니다.",
+      allFields: "전체",
+      vocabBreakdown: "단어·품사별",
+      sentenceBreakdown: "예문·주제별",
+      uncategorized: "미분류",
+      settingsNotLoaded: "공개 설정을 확인한 후 변경할 수 있습니다.",
+      settingsSaving: "공개 설정을 저장하고 있습니다.",
+      settingsSaved: "공개 설정을 저장했습니다.",
+      settingsFailed: "공개 설정을 저장하지 못했습니다. 새로고침하여 확인해 주세요.",
+      settingsUnconfirmed: "공개 설정의 저장 결과를 확인하지 못했습니다. 새로고침하여 현재 설정을 확인해 주세요.",
+      connectionRetry: "연결을 확인하고 다시 새로고침해 주세요.",
+      retryPending: "미전송 기록 재전송",
+      pendingRecords: "미전송·확인 대기 기록: {count}건. 다시 열거나 연결이 복구되면 재전송합니다.",
+      recordSaved: "계정에 저장됨",
+      recordPending: "계정 저장 확인 중",
+      recordUnsent: "미전송·재전송 가능",
+      recordLocal: "기기에만 저장됨",
+      recordUnknown: "이전 기기 기록·전송 상태 알 수 없음",
+      outboxReadFailed: "일부 미전송 기록을 읽지 못했습니다. 기존 데이터는 보존했습니다. 저장 공간 설정을 확인하고 다시 불러와 주세요.",
+      outboxWriteFailed: "미전송 기록을 기기에 저장하지 못했습니다. 저장 공간을 확인한 후 이 결과 화면에서 다시 시도해 주세요.",
     },
   },
 };
@@ -688,6 +813,10 @@ const els = {
   modeVocab: document.querySelector("#modeVocab"),
   modeSentence: document.querySelector("#modeSentence"),
   loadingText: document.querySelector("#loadingView p"),
+  legacyNotice: document.querySelector("#legacyNotice"),
+  legacyNoticeTitle: document.querySelector("#legacyNoticeTitle"),
+  legacyNoticeMessage: document.querySelector("#legacyNoticeMessage"),
+  legacyImportButton: document.querySelector("#legacyImportButton"),
   resumeNotice: document.querySelector("#resumeNotice"),
   resumeNoticeTitle: document.querySelector("#resumeNotice strong"),
   resumeMeta: document.querySelector("#resumeMeta"),
@@ -728,6 +857,21 @@ const els = {
   reviewList: document.querySelector("#reviewList"),
   cloudRankingTitle: document.querySelector("#cloudRankingTitle"),
   historyList: document.querySelector("#historyList"),
+  progressTitle: document.querySelector("#progressTitle"),
+  progressStatus: document.querySelector("#progressStatus"),
+  progressRefreshButton: document.querySelector("#progressRefreshButton"),
+  progressContent: document.querySelector("#progressContent"),
+  rankingPublic: document.querySelector("#rankingPublic"),
+  rankingPublicLabel: document.querySelector("#rankingPublicLabel"),
+  rankingPrivacyHint: document.querySelector("#rankingPrivacyHint"),
+  rankingSettingsStatus: document.querySelector("#rankingSettingsStatus"),
+  historyUserForm: document.querySelector("#historyUserForm"),
+  historyUserName: document.querySelector("#historyUserName"),
+  historyUserButton: document.querySelector("#historyUserButton"),
+  deviceHistoryTitle: document.querySelector("#deviceHistoryTitle"),
+  deviceHistoryHint: document.querySelector("#deviceHistoryHint"),
+  retryPendingButton: document.querySelector("#retryPendingButton"),
+  outboxStatus: document.querySelector("#outboxStatus"),
   cloudRankingSection: document.querySelector("#cloudRankingSection"),
   rankingStatus: document.querySelector("#rankingStatus"),
   rankingRefreshButton: document.querySelector("#rankingRefreshButton"),
@@ -743,12 +887,9 @@ const els = {
   diagnosticsTitle: document.querySelector("#diagnosticsView h2"),
   errorTitle: document.querySelector("#errorView h2"),
   languageLinksLabel: document.querySelector("#languageLinksLabel"),
-  versionLinksLabel: document.querySelector("#versionLinksLabel"),
   jaAppLink: document.querySelector("#jaAppLink"),
   zhAppLink: document.querySelector("#zhAppLink"),
   koAppLink: document.querySelector("#koAppLink"),
-  mobileAppLink: document.querySelector("#mobileAppLink"),
-  classicAppLink: document.querySelector("#classicAppLink"),
   homeNav: document.querySelector("#homeNav"),
   quizNav: document.querySelector("#quizNav"),
   historyNav: document.querySelector("#historyNav"),
@@ -778,7 +919,13 @@ const state = {
   lastFrameHeight: 0,
   latestScoreSyncResult: null,
   rankings: createEmptyRankingsState(),
-  rankingRequestTimeout: null,
+  progress: createEmptyProgressState(),
+  outbox: [],
+  outboxReadFailed: false,
+  outboxRetryTimeout: null,
+  mobileConfigReady: !IS_STREAMLIT_COMPONENT,
+  legacyCandidate: null,
+  legacyInspectionToken: 0,
   audioPlayer: null,
   audioPlaybackToken: 0,
   autoPromptAudioAllowedUntil: 0,
@@ -787,10 +934,13 @@ const state = {
     vocab: { status: "idle", message: "", audioKey: "" },
     sentence: { status: "idle", message: "", audioKey: "" },
   },
-  scoreSyncRetryQueuedFor: "",
-  scoreSyncRetryTimeout: null,
   diagnosticsRenderToken: 0,
 };
+
+const bridgeQueue = new SerializedBridge({
+  send: (payload) => streamlitHost.setComponentValue(payload),
+  onTimeout: handleBridgeTimeout,
+});
 
 init().catch((error) => {
   showFatalError(error);
@@ -831,7 +981,8 @@ async function init() {
   } else {
     setView("setup");
   }
-  schedulePendingScoreSyncRetry();
+  restorePendingScores();
+  inspectStoredLegacyQuiz();
   updateSaveStatus(t("ready"));
 }
 
@@ -839,6 +990,7 @@ function bindEvents() {
   els.reloadButton.addEventListener("click", () => window.location.reload());
   els.resumeButton.addEventListener("click", resumeStoredSession);
   els.resumeNoticeButton.addEventListener("click", resumeStoredSession);
+  els.legacyImportButton.addEventListener("click", importLegacyQuiz);
 
   els.modeVocab.addEventListener("click", () => switchMode("vocab"));
   els.modeSentence.addEventListener("click", () => switchMode("sentence"));
@@ -849,6 +1001,15 @@ function bindEvents() {
   });
 
   els.userName.addEventListener("input", persistSettingsFromForm);
+  els.historyUserForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    changeCurrentUser(els.historyUserName.value);
+    requestProgress({ force: true });
+    requestRankings({ force: true });
+  });
+  els.progressRefreshButton.addEventListener("click", () => requestProgress({ force: true }));
+  els.rankingPublic.addEventListener("change", saveRankingVisibility);
+  els.retryPendingButton.addEventListener("click", () => retryPendingScores(currentUserName()));
   els.directionSelect.addEventListener("change", persistSettingsFromForm);
   els.seedInput.addEventListener("change", () => {
     persistSettingsFromForm();
@@ -892,15 +1053,14 @@ function bindEvents() {
     retrySession();
   });
   els.newQuizButton.addEventListener("click", () => {
-    clearStoredSession();
-    setView("setup");
+    if (clearStoredSession()) setView("setup");
   });
   els.clearHistoryButton.addEventListener("click", () => {
     if (!state.history.length) {
       return;
     }
     if (window.confirm(t("clearHistoryConfirm"))) {
-      state.history = [];
+      state.history = state.history.filter((record) => String(record.userName || "").trim() !== currentUserName());
       saveHistory();
       renderHistory();
       showToast(t("clearHistoryDone"));
@@ -932,6 +1092,7 @@ function bindEvents() {
   els.historyNav.addEventListener("click", () => {
     renderHistory();
     setView("history");
+    requestProgress();
     requestRankings();
   });
   els.diagnosticsNav.addEventListener("click", () => setView("diagnostics"));
@@ -943,10 +1104,82 @@ function bindEvents() {
       saveSettings();
     }
   });
+  window.addEventListener("online", () => retryPendingScores());
+  window.addEventListener("storage", (event) => {
+    if (event.key === OUTBOX_KEY || event.key?.startsWith(OUTBOX_ENTRY_PREFIX)) {
+      loadPendingScoresFromStorage();
+      refreshScoreViews();
+    }
+  });
   window.addEventListener("beforeunload", () => {
     saveSession();
     saveSettings();
   });
+}
+
+async function inspectStoredLegacyQuiz() {
+  if (!state.mobileConfigReady || !hasLoadedQuizData()) return;
+  const token = ++state.legacyInspectionToken;
+  const targetLang = state.mobileConfig.targetLang;
+  const mode = state.settings.mode;
+  try {
+    const candidate = await inspectLegacySession({
+      storage: window.localStorage, targetLang, mode,
+      source: state.mobileConfig.source, appVersion: APP_VERSION,
+      currentSession: state.session, sentenceEntries: state.data.sentences, sessionKey: SESSION_KEY,
+    });
+    if (token !== state.legacyInspectionToken || targetLang !== state.mobileConfig.targetLang
+        || mode !== state.settings.mode) return;
+    if (state.session) {
+      state.legacyCandidate = null;
+      els.legacyNotice.hidden = true;
+      return;
+    }
+    state.legacyCandidate = candidate.status === "ready" ? candidate : null;
+    els.legacyNotice.hidden = !["ready", "unsupported", "invalid"].includes(candidate.status);
+    els.legacyImportButton.hidden = candidate.status !== "ready";
+    els.legacyNoticeMessage.textContent = candidate.status !== "ready" ? t("legacyUnsupported")
+      : isLegacyScoreSaveBlocked(candidate.session) ? t("legacyUnknownSaveHint")
+      : candidate.session.status === "complete" && candidate.session.scoreSyncStatus !== "saved"
+        ? t("legacyCompleteHint") : t("legacyResumeHint");
+    requestFrameHeightSync();
+  } catch (error) {
+    console.warn("Could not inspect previous quiz", error);
+    els.legacyNotice.hidden = false;
+    els.legacyImportButton.hidden = true;
+    els.legacyNoticeMessage.textContent = t("legacyUnsupported");
+  }
+}
+
+function importLegacyQuiz() {
+  const candidate = state.legacyCandidate;
+  if (!candidate || state.session) return;
+  const converted = sanitizeSession(candidate.session);
+  if (!converted) {
+    els.legacyNoticeMessage.textContent = t("legacyUnsupported");
+    return;
+  }
+  const imported = commitLegacySessionImport({ storage: window.localStorage, candidate, sessionKey: SESSION_KEY });
+  if (!imported.ok) {
+    els.legacyNoticeMessage.textContent = t("legacyImportFailed");
+    return;
+  }
+  state.session = converted;
+  state.settings = { ...converted.settings };
+  invalidateAccountData();
+  normalizeSettings();
+  renderSetup();
+  state.legacyCandidate = null;
+  els.legacyNotice.hidden = true;
+  if (isCompleteSession(converted)) {
+    finishSession();
+    setView("result");
+    renderResult();
+  } else {
+    setView("quiz");
+    renderQuiz();
+  }
+  showToast(t("legacyImported"));
 }
 
 function resumeStoredSession() {
@@ -957,7 +1190,7 @@ function resumeStoredSession() {
   } else if (isCompleteSession(state.session)) {
     setView("result");
     renderResult();
-    schedulePendingScoreSyncRetry();
+    pumpScoreOutbox();
   }
 }
 
@@ -967,7 +1200,7 @@ function installStreamlitMessageHandler() {
   }
   window.addEventListener("message", (event) => {
     const message = event.data;
-    if (!message || message.type !== "streamlit:render") {
+    if (event.source !== window.parent || !message || message.type !== "streamlit:render") {
       return;
     }
     if (message.args?.audioConfig) {
@@ -976,6 +1209,8 @@ function installStreamlitMessageHandler() {
     if (message.args?.mobileConfig) {
       applyMobileConfig(message.args.mobileConfig);
     }
+    if (message.args?.progressResult) handleProgressResult(message.args.progressResult);
+    if (message.args?.userSettingsResult) handleUserSettingsResult(message.args.userSettingsResult);
     const result = message.args?.scoreSyncResult;
     if (result) {
       handleScoreSyncResult(result);
@@ -1076,32 +1311,26 @@ function renderAppLinks() {
       return;
     }
     link.textContent = label;
-    link.href = buildPublicAppUrl(targetLang, { mobile_app: "1", quiz: mode });
+    link.href = buildPublicAppUrl(targetLang, { quiz: mode });
     link.setAttribute("rel", "noopener noreferrer");
     setCurrentLink(link, targetLang === lang);
   });
 
-  if (els.mobileAppLink) {
-    els.mobileAppLink.href = buildPublicAppUrl(lang, { mobile_app: "1", quiz: mode });
-    els.mobileAppLink.setAttribute("rel", "noopener noreferrer nofollow");
-    setCurrentLink(els.mobileAppLink, true);
-  }
-  if (els.classicAppLink) {
-    els.classicAppLink.href = buildPublicAppUrl(lang, { classic: "1", quiz: mode });
-    els.classicAppLink.setAttribute("rel", "noopener noreferrer nofollow");
-    setCurrentLink(els.classicAppLink, false);
-  }
+
 }
 
 function applyMobileConfig(config) {
+  state.mobileConfigReady = true;
   const candidate = isPlainObject(config) ? config : {};
   const next = {
     source: String(candidate.source || state.mobileConfig.source || "static"),
     targetLang: normalizeTargetLang(candidate.targetLang || state.mobileConfig.targetLang),
     defaultMode: normalizeDefaultMode(candidate.defaultMode || state.mobileConfig.defaultMode),
   };
+  const previousLang = state.mobileConfig.targetLang;
   const previous = JSON.stringify(state.mobileConfig);
   state.mobileConfig = next;
+  if (previousLang !== next.targetLang) invalidateAccountData();
   if (previous !== JSON.stringify(state.mobileConfig)) {
     const isIdle = !isActiveSession(state.session) && !isCompleteSession(state.session);
     if (isIdle) {
@@ -1116,6 +1345,7 @@ function applyMobileConfig(config) {
       renderDiagnostics();
     }
   }
+  inspectStoredLegacyQuiz();
 }
 
 function applyDefaultModeToIdleState() {
@@ -1145,6 +1375,8 @@ function applyStaticText() {
   setText(els.modeSentence, meta.modeSentence);
   setText(els.resumeButton, t("resumeShort"));
   setText(els.resumeNoticeTitle, t("resumeTitle"));
+  setText(els.legacyNoticeTitle, t("legacyTitle"));
+  setText(els.legacyImportButton, t("legacyImport"));
   setText(els.resumeNoticeButton, t("resumeAction"));
   setText(document.querySelector("label[for='userName']"), t("userName"));
   setText(document.querySelector("label[for='directionSelect']"), t("direction"));
@@ -1179,9 +1411,16 @@ function applyStaticText() {
   setText(els.historyNav, t("navHistory"));
   setText(els.diagnosticsNav, t("navDiagnostics"));
   setText(els.languageLinksLabel, t("languageLinks"));
-  setText(els.versionLinksLabel, t("displayLinks"));
-  setText(els.mobileAppLink, t("mobileVersion"));
-  setText(els.classicAppLink, t("classicVersion"));
+  setText(els.progressTitle, t("personalProgress"));
+  setText(els.progressRefreshButton, t("refresh"));
+  setText(els.rankingPublicLabel, t("rankingPublic"));
+  setText(els.rankingPrivacyHint, t("rankingPrivacyHint"));
+  setText(els.historyUserButton, t("showRecords"));
+  setText(document.querySelector("label[for='historyUserName']"), t("userName"));
+  setText(els.deviceHistoryTitle, t("localHistory"));
+  setText(els.deviceHistoryHint, t("deviceHistoryHint"));
+  setText(els.retryPendingButton, t("retryPending"));
+  document.querySelectorAll(".name-account-hint").forEach((element) => setText(element, t("nameAccountHint")));
   els.resultMetricLabels.forEach((node, index) => {
     setText(node, [t("accuracy"), t("points"), t("correct")][index]);
   });
@@ -1259,7 +1498,8 @@ function normalizeAudioConfig(config) {
     || DRIVE_AUDIO_DOWNLOAD_BASE,
   ).trim();
   const hasManifestAudio = hasAudioManifestForMode("vocab") || hasAudioManifestForMode("sentence");
-  const useManifestAudio = Boolean(candidate.useDriveManifest || hasManifestAudio);
+  const useManifestAudio = (!IS_STREAMLIT_COMPONENT || candidate.useDriveManifest !== false)
+    && Boolean(candidate.useDriveManifest || hasManifestAudio);
   if (!IS_STREAMLIT_COMPONENT) {
     return {
       ...DEFAULT_AUDIO_CONFIG,
@@ -1293,6 +1533,8 @@ function createEmptyAudioManifest() {
 function createEmptyRankingsState() {
   return {
     status: "idle",
+    user: "",
+    targetLang: "",
     activeTab: "overall",
     requestId: "",
     message: "",
@@ -1330,55 +1572,52 @@ function sanitizeAudioIdMap(value) {
 }
 
 function handleScoreSyncResult(result) {
-  const session = state.session;
-  if (!isCompleteSession(session) || result.type !== "score_save_result") {
-    return;
-  }
-  const resultSaveId = String(result.saveId || "");
-  const resultRequestId = String(result.requestId || "");
-  const matchesSave = Boolean(resultSaveId && session.scoreSaveId && resultSaveId === session.scoreSaveId);
-  const matchesRequest = Boolean(resultRequestId && session.scoreSyncRequestId && resultRequestId === session.scoreSyncRequestId);
-  if (!matchesSave && !matchesRequest) {
-    return;
-  }
-  session.scoreSyncStatus = result.ok ? "saved" : "error";
-  session.scoreSyncMessage = String(result.message || (result.ok ? t("scoreSavedMessage") : t("scoreSaveFailedMessage")));
-  session.scoreSyncRecoverable = result.ok ? "" : String(result.recoverable || "");
-  session.scoreSyncRetryCount = 0;
+  if (!isPlainObject(result) || result.type !== "score_save_result") return;
+  bridgeQueue.accept(result);
+  const entry = state.outbox.find((item) => item.payload.saveId === result.saveId
+    && item.payload.requestId === result.requestId);
+  if (!entry) return;
   state.latestScoreSyncResult = result;
+  entry.status = result.ok ? "saved" : "error";
+  entry.message = String(result.message || t(result.ok ? "scoreSavedMessage" : "scoreSaveFailedMessage"));
+  entry.payload.retryMode = result.ok ? "" : String(result.recoverable || "");
   if (result.ok) {
+    updateScoreRecord(entry);
+    try {
+      scoreOutboxStorage().acknowledge(entry.payload.saveId);
+    } catch (error) {
+      // Durable saved session/history can repair this receipt on the next refresh.
+      console.warn("Could not store the score acknowledgement", error);
+    }
+    state.outbox = state.outbox.filter((item) => item !== entry);
+  } else {
+    persistOutboxEntry(entry);
+    updateScoreRecord(entry);
+  }
+  if (result.ok && entry.payload.user === currentUserName()) {
     state.rankings.loadedAt = 0;
+    state.progress.loadedAt = 0;
+    if (state.currentView === "history") {
+      requestProgress({ force: true });
+      requestRankings({ force: true });
+    }
   }
-  state.scoreSyncRetryQueuedFor = "";
-  window.clearTimeout(state.scoreSyncRetryTimeout);
-  saveSession();
-  if (state.currentView === "result") {
-    renderResult();
-  }
-  if (result.ok && state.currentView === "history") {
-    requestRankings({ force: true });
-  }
+  refreshScoreViews();
+  pumpScoreOutbox();
 }
 
 function handleRankingResult(result) {
-  if (!isPlainObject(result) || result.type !== "rankings_result") {
-    return;
-  }
-  const resultRequestId = String(result.requestId || "");
-  if (state.rankings.requestId && resultRequestId && resultRequestId !== state.rankings.requestId) {
-    return;
-  }
-  window.clearTimeout(state.rankingRequestTimeout);
-  state.rankingRequestTimeout = null;
+  if (!isPlainObject(result) || result.type !== "rankings_result") return;
+  bridgeQueue.accept(result);
+  if (!matchesAccountResult(result, state.rankings, currentUserName(), state.mobileConfig.targetLang)) return;
+  state.rankings.requestId = "";
   state.rankings.status = result.ok ? "ready" : "error";
-  state.rankings.message = String(result.message || (result.ok ? t("rankingUpdatedMessage") : t("rankingFailedMessage")));
-  state.rankings.updatedAt = String(result.updatedAt || new Date().toISOString());
-  state.rankings.loadedAt = Date.now();
+  state.rankings.message = String(result.message || t(result.ok ? "rankingUpdatedMessage" : "rankingFailedMessage"));
+  state.rankings.updatedAt = String(result.updatedAt || "");
+  state.rankings.loadedAt = result.ok ? Date.now() : 0;
   state.rankings.rankings = sanitizeRankingsPayload(result.rankings);
   state.rankings.own = isPlainObject(result.own) ? result.own : {};
-  if (state.currentView === "history") {
-    renderCloudRankings();
-  }
+  if (state.currentView === "history") renderCloudRankings();
 }
 
 function installFrameHeightSync() {
@@ -1420,7 +1659,9 @@ function syncFrameHeight() {
   const fixedNavView = ["quiz", "result", "history", "diagnostics", "error"].includes(state.currentView);
   const desiredHeight = fixedNavView
     ? interactiveHeight
-    : Math.max(minHeight, contentHeight + 8);
+    // The document includes the iframe viewport through min-height: 100dvh.
+    // Adding padding here feeds it back into the next measurement forever.
+    : Math.max(minHeight, contentHeight);
   if (Math.abs(desiredHeight - state.lastFrameHeight) >= 4) {
     state.lastFrameHeight = desiredHeight;
     streamlitHost.setFrameHeight(desiredHeight);
@@ -1495,6 +1736,7 @@ function loadLocalState() {
   state.settings = sanitizeSettings(readJson(SETTINGS_KEY, {}));
   state.session = sanitizeSession(readJson(SESSION_KEY, null));
   state.history = sanitizeHistory(readJson(HISTORY_KEY, []));
+  loadPendingScoresFromStorage();
 }
 
 function readJson(key, fallback) {
@@ -1513,7 +1755,7 @@ function sanitizeSettings(value) {
     ...DEFAULT_SETTINGS,
     ...candidate,
   };
-  settings.userName = String(settings.userName || "").trim().slice(0, 32);
+  settings.userName = String(settings.userName || "").trim();
   settings.seed = clampInteger(settings.seed, 1, 8192, DEFAULT_SETTINGS.seed);
   if (!["vocab", "sentence"].includes(settings.mode)) {
     settings.mode = DEFAULT_SETTINGS.mode;
@@ -1540,7 +1782,7 @@ function sanitizeSession(value) {
   if (!isPlainObject(value) || !["active", "complete"].includes(value.status)) {
     return null;
   }
-  if (!Array.isArray(value.questions) || !value.questions.length || !value.questions.every(isValidQuestion)) {
+  if (!Array.isArray(value.questions) || !value.questions.length || !value.questions.every((question) => isValidQuestion(question, hasClassicMigrationProvenance(value) && value.settings?.mode === "vocab"))) {
     return null;
   }
   const questionCount = value.questions.length;
@@ -1578,7 +1820,6 @@ function sanitizeSession(value) {
     scoreSyncRequestId: String(value.scoreSyncRequestId || ""),
     scoreSyncStatus,
     scoreSyncRecoverable: String(value.scoreSyncRecoverable || ""),
-    scoreSyncRetryCount: clampInteger(value.scoreSyncRetryCount, 0, SCORE_SYNC_AUTO_RETRY_MAX, 0),
     scoreSyncMessage: scoreSyncStatus === "pending"
       ? t("scorePendingRestored")
       : String(value.scoreSyncMessage || ""),
@@ -1602,7 +1843,7 @@ function sanitizeHistory(value) {
     .filter(isPlainObject)
     .map((record) => ({
       id: String(record.id || createId()),
-      userName: String(record.userName || "").slice(0, 32),
+      userName: String(record.userName || "").trim(),
       mode: record.mode === "sentence" ? "sentence" : "vocab",
       direction: record.direction === "ja_to_eo" ? "ja_to_eo" : "eo_to_ja",
       correct: clampInteger(record.correct, 0, 99999, 0),
@@ -1610,15 +1851,18 @@ function sanitizeHistory(value) {
       accuracy: Math.min(1, Math.max(0, finiteNumber(record.accuracy, 0))),
       points: finiteNumber(record.points, 0),
       completedAt: String(record.completedAt || ""),
+      scoreSaveId: String(record.scoreSaveId || ""),
+      scoreSyncStatus: ["pending", "saved", "error", "local"].includes(record.scoreSyncStatus) ? record.scoreSyncStatus : "unknown",
     }))
     .slice(0, HISTORY_MAX_ITEMS);
 }
 
-function isValidQuestion(question) {
+function isValidQuestion(question, legacyVocab = false) {
   return Boolean(
     isPlainObject(question)
     && Array.isArray(question.options)
-    && question.options.length >= 4
+    && question.options.length >= (legacyVocab ? 2 : 4)
+    && question.options.length <= 4
     && Number.isInteger(question.answerIndex)
     && question.answerIndex >= 0
     && question.answerIndex < question.options.length
@@ -1700,25 +1944,44 @@ function saveSettings() {
 }
 
 function saveSession() {
-  if (state.session) {
-    state.session.updatedAt = new Date().toISOString();
+  return persistPresentSession(state.session, (session) => {
+    session.updatedAt = new Date().toISOString();
+    // A failed confirmation write must not delete the history's only durable acknowledgement.
+    const saved = writeJson(SESSION_KEY, session, { allowRecovery: session.scoreSyncStatus !== "saved" });
+    if (saved) updateSaveStatus(t("autoSaved"));
+    return saved;
+  });
+}
+
+function ensureSessionCanBeReplaced() {
+  const allowed = canReplaceSession(state.session, {
+    cloudEnabled: IS_STREAMLIT_COMPONENT,
+    viewOnly: isLegacyScoreSaveBlocked(state.session),
+    ensureDurable: enqueueCompletedScore,
+  });
+  if (!allowed) {
+    setView("result");
+    renderResult();
+    showToast(t("saveBeforeNewQuiz"));
   }
-  if (writeJson(SESSION_KEY, state.session)) {
-    updateSaveStatus(t("autoSaved"));
-  }
+  return allowed;
 }
 
 function clearStoredSession() {
+  if (!ensureSessionCanBeReplaced()) return false;
   window.clearTimeout(state.saveTimer);
-  state.session = null;
   try {
     window.localStorage.removeItem(SESSION_KEY);
-    updateSaveStatus(t("sessionDiscarded"));
   } catch (error) {
     console.warn(`Failed to remove ${SESSION_KEY}`, error);
-    writeJson(SESSION_KEY, null);
+    showToast(t("saveFailed"));
+    return false;
   }
+  state.session = null;
+  updateSaveStatus(t("sessionDiscarded"));
   refreshResumeButton();
+  inspectStoredLegacyQuiz();
+  return true;
 }
 
 function queueSessionSave() {
@@ -1729,55 +1992,42 @@ function queueSessionSave() {
   }, 80);
 }
 
-function saveHistory() {
+function saveHistory({ allowRecovery = true } = {}) {
   state.history = state.history.slice(0, HISTORY_MAX_ITEMS);
-  writeJson(HISTORY_KEY, state.history);
+  writeJson(HISTORY_KEY, state.history, { allowRecovery });
 }
 
 function requestRankings({ force = false } = {}) {
+  if (state.progress.settingsPending || state.progress.settingsUncertain) {
+    renderCloudRankings();
+    return;
+  }
   if (!IS_STREAMLIT_COMPONENT) {
     state.rankings.status = "unavailable";
     state.rankings.message = t("rankingUnavailable");
     renderCloudRankings();
     return;
   }
-  const now = Date.now();
-  if (
-    !force
-    && state.rankings.status === "ready"
-    && state.rankings.loadedAt
-    && now - state.rankings.loadedAt < RANKING_CACHE_TTL_MS
-  ) {
+  const user = currentUserName();
+  const targetLang = state.mobileConfig.targetLang;
+  if (state.rankings.user !== user || state.rankings.targetLang !== targetLang) {
+    state.rankings = createEmptyRankingsState();
+    bridgeQueue.discardPending((payload) => payload.type === "load_rankings");
+  }
+  if (state.rankings.status === "loading") return;
+  if (!force && isAccountCacheFresh(state.rankings, { user, targetLang, ttlMs: RANKING_CACHE_TTL_MS })) {
     renderCloudRankings();
     return;
   }
-  if (state.rankings.status === "loading" && !force) {
-    renderCloudRankings();
-    return;
-  }
-  window.clearTimeout(state.rankingRequestTimeout);
-  state.rankings.status = "loading";
-  state.rankings.requestId = createId();
-  state.rankings.message = t("rankingLoading");
-  const requestId = state.rankings.requestId;
-  state.rankingRequestTimeout = window.setTimeout(() => {
-    if (state.rankings.status !== "loading" || state.rankings.requestId !== requestId) {
-      return;
-    }
-    state.rankings.status = "error";
-    state.rankings.message = t("rankingTimeout");
-    renderCloudRankings();
-  }, RANKING_REQUEST_TIMEOUT_MS);
+  Object.assign(state.rankings, {
+    status: "loading", requestId: createId(), user: currentUserName(),
+    targetLang: state.mobileConfig.targetLang, message: t("rankingLoading"),
+  });
   renderCloudRankings();
-  streamlitHost.setComponentValue({
-    type: "load_rankings",
-    requestId: state.rankings.requestId,
-    user: String(state.settings.userName || "").trim(),
-    force: Boolean(force),
-    appVersion: APP_VERSION,
-    mobileSource: state.mobileConfig.source,
-    targetLang: state.mobileConfig.targetLang,
-    ts: new Date().toISOString(),
+  bridgeQueue.enqueue({
+    type: "load_rankings", requestId: state.rankings.requestId, user: state.rankings.user,
+    force: Boolean(force), appVersion: APP_VERSION, mobileSource: state.mobileConfig.source,
+    targetLang: state.mobileConfig.targetLang, ts: new Date().toISOString(),
   });
 }
 
@@ -1828,7 +2078,7 @@ function normalizeSettings() {
 }
 
 function persistSettingsFromForm() {
-  state.settings.userName = els.userName.value.trim();
+  changeCurrentUser(els.userName.value);
   state.settings.direction = els.directionSelect.value;
   state.settings.seed = clampInteger(els.seedInput.value, 1, 8192, 1);
   state.settings.pos = els.posSelect.value || state.settings.pos;
@@ -1852,6 +2102,7 @@ function switchMode(mode) {
   state.settings.mode = mode;
   normalizeSettings();
   renderSetup();
+  inspectStoredLegacyQuiz();
   requestFrameHeightSync();
 }
 
@@ -1993,6 +2244,7 @@ function getCheckedLevels() {
 }
 
 function startQuiz({ replaceActive = false } = {}) {
+  if (!ensureSessionCanBeReplaced()) return false;
   let shouldDiscardActive = false;
   if (isActiveSession(state.session) && !replaceActive) {
     const replace = window.confirm(t("replaceActiveConfirm"));
@@ -2005,9 +2257,7 @@ function startQuiz({ replaceActive = false } = {}) {
   } else if (isActiveSession(state.session) && replaceActive) {
     shouldDiscardActive = true;
   }
-  if (shouldDiscardActive) {
-    clearStoredSession();
-  }
+  if (shouldDiscardActive && !clearStoredSession()) return false;
   persistSettingsFromForm();
   const settings = { ...state.settings, levels: [...state.settings.levels] };
   const seed = settings.seed + Date.now();
@@ -2046,7 +2296,6 @@ function startQuiz({ replaceActive = false } = {}) {
     scoreSyncRequestId: "",
     scoreSyncStatus: "idle",
     scoreSyncRecoverable: "",
-    scoreSyncRetryCount: 0,
     scoreSyncMessage: "",
     startedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -2063,11 +2312,13 @@ function retrySession() {
     setView("setup");
     return;
   }
+  const previousUser = currentUserName();
   state.settings = {
     ...DEFAULT_SETTINGS,
     ...state.session.settings,
     levels: [...(state.session.settings.levels || [])],
   };
+  if (previousUser !== currentUserName()) invalidateAccountData();
   renderSetup();
   startQuiz();
 }
@@ -2108,60 +2359,8 @@ function buildSentenceQuestions(settings, rng) {
   })).filter(Boolean);
 }
 
-function buildQuestionFromEntry({ mode, correct, pool, stages, rng, direction }) {
-  const correctTarget = targetText(correct);
-  const normalizedDirection = direction === "ja_to_eo" ? "ja_to_eo" : "eo_to_ja";
-  const correctDisplay = choiceDisplayTextForEntry(correct, normalizedDirection, correctTarget);
-  const wrongPool = pool.filter((entry) => (
-    entry !== correct
-    && entry.eo !== correct.eo
-    && targetText(entry) !== correctTarget
-  ));
-  if (wrongPool.length < 3) {
-    return null;
-  }
-  const wrongOptions = [];
-  const seenDisplays = new Set([correctDisplay]);
-  for (const entry of shuffle([...wrongPool], rng)) {
-    const display = choiceDisplayTextForEntry(entry, normalizedDirection);
-    if (!display || seenDisplays.has(display)) {
-      continue;
-    }
-    seenDisplays.add(display);
-    wrongOptions.push(entry);
-    if (wrongOptions.length === 3) {
-      break;
-    }
-  }
-  if (wrongOptions.length < 3) {
-    return null;
-  }
-  const options = shuffle([...wrongOptions, correct], rng).map((entry) => ({
-    id: entry.id,
-    eo: entry.eo,
-    ja: targetText(entry),
-    translations: isPlainObject(entry.translations) ? { ...entry.translations } : undefined,
-    level: Number(entry.level),
-    audioKey: entry.audioKey,
-    hasAudio: Boolean(entry.hasAudio),
-  }));
-  const answerIndex = options.findIndex((option) => option.id === correct.id && option.eo === correct.eo);
-  return {
-    mode,
-    promptEo: correct.eo,
-    promptJa: correctTarget,
-    stages: [...stages],
-    level: Number(correct.level),
-    answerIndex,
-    options,
-  };
-}
-
-function choiceDisplayTextForEntry(entry, direction, cachedTargetText = undefined) {
-  if (direction === "ja_to_eo") {
-    return String(entry?.eo || "").trim();
-  }
-  return cachedTargetText === undefined ? targetText(entry) : cachedTargetText;
+function buildQuestionFromEntry(options) {
+  return buildLocalizedQuestion({ ...options, targetLang: state.mobileConfig.targetLang });
 }
 
 function renderQuiz() {
@@ -2390,6 +2589,10 @@ function finishSession() {
       accuracy: summary.accuracy,
       points: summary.points,
       completedAt: session.completedAt,
+      scoreSaveId: session.scoreSaveId || `mobile-${session.id}`,
+      scoreSyncStatus: isLegacyScoreSaveBlocked(session) ? "unknown"
+        : session.scoreSyncStatus === "saved" ? "saved"
+          : IS_STREAMLIT_COMPONENT && session.settings.userName ? "pending" : "local",
     });
     state.history = state.history.slice(0, HISTORY_MAX_ITEMS);
     session.savedToHistory = true;
@@ -2397,6 +2600,7 @@ function finishSession() {
   }
   saveSession();
   refreshResumeButton();
+  enqueueCompletedScore(session);
 }
 
 function renderResult() {
@@ -2414,13 +2618,18 @@ function renderResult() {
   els.countMetric.textContent = `${summary.correct}/${summary.total}`;
   renderScoreSyncControls(summary);
   renderReview();
-  schedulePendingScoreSyncRetry();
 }
 
 function renderScoreSyncControls(summary) {
   const session = state.session;
   const userName = String(session.settings.userName || "").trim();
   els.syncScoreStatus.classList.remove("is-success", "is-error");
+  if (isLegacyScoreSaveBlocked(session)) {
+    els.syncScoreButton.disabled = true;
+    els.syncScoreButton.textContent = t("legacyViewOnly");
+    els.syncScoreStatus.textContent = t("legacyUnknownSaveHint");
+    return;
+  }
 
   if (!IS_STREAMLIT_COMPONENT) {
     els.syncScoreButton.disabled = true;
@@ -2462,102 +2671,264 @@ function renderScoreSyncControls(summary) {
 
 function syncScoreToSheets() {
   const session = state.session;
-  if (!isCompleteSession(session)) {
-    return;
+  if (!isCompleteSession(session) || session.scoreSyncStatus === "saved" || isLegacyScoreSaveBlocked(session)) return;
+  enqueueCompletedScore(session);
+  const entry = state.outbox.find((item) => item.payload.sessionId === session.id);
+  if (entry && !bridgeQueue.has(entry.payload.requestId)) {
+    entry.status = "pending";
+    entry.attempts = 0;
+    entry.nextAttemptAt = 0;
+    if (persistOutboxEntry(entry)) pumpScoreOutbox();
   }
-  const summary = computeResultSummary(session);
-  const userName = String(session.settings.userName || "").trim();
-  if (!IS_STREAMLIT_COMPONENT) {
-    session.scoreSyncStatus = "error";
-    session.scoreSyncMessage = t("scoreUnavailable");
-    saveSession();
-    renderResult();
-    return;
-  }
-  if (!userName) {
-    session.scoreSyncStatus = "error";
-    session.scoreSyncMessage = t("scoreUserRequired");
-    saveSession();
-    renderResult();
-    return;
-  }
-  if (session.scoreSyncStatus === "saved" || session.scoreSyncStatus === "pending") {
-    return;
-  }
-  sendScoreSyncRequest(session, summary, t("scoreSavingMessage"));
 }
 
-function schedulePendingScoreSyncRetry() {
-  const session = state.session;
-  if (
-    !IS_STREAMLIT_COMPONENT
-    || !isCompleteSession(session)
-    || session.scoreSyncStatus !== "pending"
-  ) {
-    return;
-  }
-  const retryKey = `${session.id}:${session.scoreSaveId || ""}:${session.scoreSyncRequestId || ""}`;
-  if (state.scoreSyncRetryQueuedFor === retryKey) {
-    return;
-  }
-  state.scoreSyncRetryQueuedFor = retryKey;
-  window.clearTimeout(state.scoreSyncRetryTimeout);
-  state.scoreSyncRetryTimeout = window.setTimeout(() => {
-    const current = state.session;
-    if (!isCompleteSession(current) || current.scoreSyncStatus !== "pending") {
-      return;
-    }
-    const userName = String(current.settings.userName || "").trim();
-    if (!userName) {
-      current.scoreSyncStatus = "error";
-      current.scoreSyncMessage = t("scoreUserRequired");
-      current.scoreSyncRetryCount = 0;
-      state.scoreSyncRetryQueuedFor = "";
-      saveSession();
-      if (state.currentView === "result") {
-        renderResult();
-      }
-      return;
-    }
-    if (current.scoreSyncRetryCount >= SCORE_SYNC_AUTO_RETRY_MAX) {
-      current.scoreSyncStatus = "error";
-      current.scoreSyncMessage = t("scoreRetryLimit");
-      current.scoreSyncRetryCount = 0;
-      state.scoreSyncRetryQueuedFor = "";
-      saveSession();
-      if (state.currentView === "result") {
-        renderResult();
-      }
-      return;
-    }
-    current.scoreSyncRetryCount += 1;
-    sendScoreSyncRequest(
-      current,
-      computeResultSummary(current),
-      t("scoreAutoRetry"),
-      { autoRetry: true },
-    );
-  }, SCORE_SYNC_RETRY_DELAY_MS);
+function scoreOutboxStorage() {
+  return new DurableScoreOutbox({
+    storage: window.localStorage, prefix: OUTBOX_ENTRY_PREFIX, legacyKey: OUTBOX_KEY,
+  });
 }
 
-function sendScoreSyncRequest(session, summary, message, options = {}) {
-  if (!session.scoreSaveId) {
-    session.scoreSaveId = `mobile-${session.id}`;
+function readConfirmedScoreEvidence() {
+  const read = (key) => {
+    try {
+      const raw = window.localStorage.getItem(key);
+      return raw === null ? null : JSON.parse(raw);
+    } catch (error) {
+      console.warn("Could not read a saved score confirmation", error);
+      return null;
+    }
+  };
+  return { session: read(SESSION_KEY), history: read(HISTORY_KEY) };
+}
+
+function recoverConfirmedScore(entry, storage, evidence) {
+  if (!hasConfirmedScoreEvidence(entry.payload, evidence)) return false;
+  const stored = storage.read(entry.payload.saveId);
+  if (stored?.payload && !matchesScoreRecord(entry.payload, {
+    id: stored.payload.sessionId, userName: stored.payload.user, scoreSaveId: stored.payload.saveId,
+    points: stored.payload.points, total: stored.payload.total,
+  })) return false;
+  try {
+    storage.acknowledge(entry.payload.saveId);
+  } catch (error) {
+    // Keep the saved records and original queue intact if receipt repair is still unavailable.
+    console.warn("Could not repair the saved score receipt", error);
   }
-  const retryMode = session.scoreSyncRecoverable || "";
-  if (!options.autoRetry) {
-    session.scoreSyncRetryCount = 0;
+  entry.status = "saved";
+  entry.message = t("scoreSavedMessage");
+  entry.payload.retryMode = "";
+  updateScoreRecord(entry);
+  state.outbox = state.outbox.filter((item) => item.payload.saveId !== entry.payload.saveId);
+  bridgeQueue.discardPending((payload) => payload.type === "save_score" && payload.saveId === entry.payload.saveId);
+  return true;
+}
+
+function loadPendingScoresFromStorage() {
+  const previous = state.outbox;
+  let readFailed = false;
+  try {
+    const storage = scoreOutboxStorage();
+    try {
+      storage.migrateLegacy();
+    } catch (error) {
+      readFailed = true;
+      console.warn("Could not migrate the previous pending score queue; original retained", error);
+    }
+    const { entries, errors } = storage.list();
+    readFailed ||= errors.length > 0;
+    errors.forEach(({ key, error }) => console.warn(`Could not read pending score ${key}`, error));
+    const evidence = readConfirmedScoreEvidence();
+    const byId = new Map();
+    const confirmedIds = new Set();
+    for (const entry of entries) {
+      if (recoverConfirmedScore(entry, storage, evidence)) confirmedIds.add(entry.payload.saveId);
+      else byId.set(entry.payload.saveId, entry);
+    }
+    for (const entry of previous) {
+      try {
+        if (confirmedIds.has(entry.payload.saveId) || recoverConfirmedScore(entry, storage, evidence)) {
+          byId.delete(entry.payload.saveId);
+          continue;
+        }
+        const stored = storage.read(entry.payload.saveId);
+        if (stored?.type === "saved_score_receipt") {
+          entry.status = "saved";
+          entry.message = t("scoreSavedMessage");
+          updateScoreRecord(entry);
+          byId.delete(entry.payload.saveId);
+          bridgeQueue.discardPending((payload) => payload.type === "save_score" && payload.saveId === entry.payload.saveId);
+        } else if (!stored || bridgeQueue.has(entry.payload.requestId)) {
+          byId.set(entry.payload.saveId, entry);
+        }
+      } catch (error) {
+        readFailed = true;
+        byId.set(entry.payload.saveId, entry);
+        console.warn("Could not refresh a pending learning record", error);
+      }
+    }
+    state.outbox = [...byId.values()];
+  } catch (error) {
+    readFailed = true;
+    console.warn("Could not read pending learning records", error);
   }
-  session.scoreSyncRequestId = createId();
-  session.scoreSyncStatus = "pending";
-  session.scoreSyncRecoverable = "";
-  session.scoreSyncMessage = message;
-  state.scoreSyncRetryQueuedFor = "";
-  saveSession();
-  if (state.currentView === "result") {
-    renderResult();
+  state.outboxReadFailed = readFailed;
+  if (readFailed) showToast(t("outboxReadFailed"));
+}
+
+function persistOutboxEntry(entry) {
+  try {
+    const storage = scoreOutboxStorage();
+    if (recoverConfirmedScore(entry, storage, readConfirmedScoreEvidence())) return true;
+    const stored = storage.put(entry);
+    if (stored.saved) {
+      entry.status = "saved";
+      entry.message = t("scoreSavedMessage");
+      updateScoreRecord(entry);
+      state.outbox = state.outbox.filter((item) => item.payload.saveId !== entry.payload.saveId);
+      bridgeQueue.discardPending((payload) => payload.type === "save_score" && payload.saveId === entry.payload.saveId);
+    }
+    return true;
+  } catch (error) {
+    console.warn("Could not durably store a pending learning record", error);
+    showToast(t("outboxWriteFailed"));
+    return false;
   }
-  streamlitHost.setComponentValue(buildScoreSyncPayload(session, summary, retryMode));
+}
+
+function enqueueCompletedScore(session) {
+  if (!IS_STREAMLIT_COMPONENT || !isCompleteSession(session) || isLegacyScoreSaveBlocked(session)
+      || !String(session.settings.userName || "").trim() || session.scoreSyncStatus === "saved") return true;
+  if (!session.scoreSaveId) session.scoreSaveId = `mobile-${session.id}`;
+  const payload = buildScoreSyncPayload(session, computeResultSummary(session), session.scoreSyncRecoverable || "");
+  state.outbox = addToOutbox(state.outbox, payload);
+  const entry = state.outbox.find((item) => item.payload.saveId === payload.saveId);
+  if (!persistOutboxEntry(entry)) {
+    entry.status = "error";
+    entry.message = t("outboxWriteFailed");
+    updateScoreRecord(entry);
+    return false;
+  }
+  updateScoreRecord(entry);
+  pumpScoreOutbox();
+  return true;
+}
+
+function restorePendingScores() {
+  // Reconcile durable confirmations before adopting the active result or retrying any score.
+  loadPendingScoresFromStorage();
+  if (isCompleteSession(state.session)) {
+    const payload = buildScoreSyncPayload(state.session, computeResultSummary(state.session));
+    if (hasConfirmedScoreEvidence(payload, readConfirmedScoreEvidence())) {
+      updateScoreRecord({ payload, status: "saved", message: t("scoreSavedMessage") });
+    }
+  }
+  enqueueCompletedScore(state.session);
+  retryPendingScores();
+}
+
+function updateScoreRecord(entry) {
+  const { payload, status, message } = entry;
+  const sessionRecord = scoreRecordFromSession(state.session);
+  if (!sessionRecord.scoreSaveId && sessionRecord.id) sessionRecord.scoreSaveId = `mobile-${sessionRecord.id}`;
+  if (state.session?.status === "complete" && matchesScoreRecord(payload, sessionRecord)) {
+    Object.assign(state.session, {
+      scoreSaveId: payload.saveId, scoreSyncRequestId: payload.requestId,
+      scoreSyncStatus: status, scoreSyncMessage: message,
+      scoreSyncRecoverable: payload.retryMode || "",
+    });
+    saveSession();
+  }
+  const record = state.history.find((item) => matchesScoreRecord(payload, {
+    ...item, scoreSaveId: item.scoreSaveId || `mobile-${item.id}`,
+  }));
+  if (record) {
+    record.scoreSaveId = payload.saveId;
+    record.scoreSyncStatus = status;
+    saveHistory({ allowRecovery: status !== "saved" });
+  }
+}
+
+function refreshScoreViews() {
+  if (state.currentView === "result") renderResult();
+  if (state.currentView === "history") renderHistory();
+}
+
+function pumpScoreOutbox() {
+  window.clearTimeout(state.outboxRetryTimeout);
+  if (!IS_STREAMLIT_COMPONENT) return;
+  // A sent score remains pending in durable storage until its matching acknowledgement arrives.
+  const due = state.outbox.filter((entry) => entry.status === "pending"
+    && !bridgeQueue.has(entry.payload.requestId));
+  due.forEach((entry) => {
+    if (entry.nextAttemptAt > Date.now()) return;
+    entry.payload.requestId = createId();
+    entry.payload.ts = new Date().toISOString();
+    entry.attempts += 1;
+    entry.message = t("scoreSavingMessage");
+    if (!persistOutboxEntry(entry)) {
+      entry.status = "error";
+      entry.message = t("outboxWriteFailed");
+      updateScoreRecord(entry);
+      return;
+    }
+    if (entry.status === "saved") return;
+    updateScoreRecord(entry);
+    bridgeQueue.enqueue(entry.payload);
+  });
+  const future = state.outbox.filter((entry) => entry.status === "pending"
+    && !bridgeQueue.has(entry.payload.requestId)).map((entry) => entry.nextAttemptAt);
+  if (future.length) {
+    state.outboxRetryTimeout = window.setTimeout(pumpScoreOutbox, Math.max(100, Math.min(...future) - Date.now()));
+  }
+  refreshScoreViews();
+}
+
+function retryPendingScores(user) {
+  loadPendingScoresFromStorage();
+  state.outbox.forEach((entry) => {
+    if ((user === undefined || entry.payload.user === user) && !bridgeQueue.has(entry.payload.requestId)) {
+      entry.status = "pending";
+      entry.attempts = 0;
+      entry.nextAttemptAt = 0;
+      if (!persistOutboxEntry(entry)) {
+        entry.status = "error";
+        entry.message = t("outboxWriteFailed");
+        updateScoreRecord(entry);
+      }
+    }
+  });
+  pumpScoreOutbox();
+}
+
+function handleBridgeTimeout(payload) {
+  if (payload.type === "save_score") {
+    const entry = state.outbox.find((item) => item.payload.requestId === payload.requestId);
+    if (entry) {
+      const retry = entry.attempts < SCORE_SYNC_AUTO_RETRY_MAX;
+      entry.status = retry ? "pending" : "error";
+      entry.message = t(retry ? "scoreAutoRetry" : "scoreRetryLimit");
+      entry.nextAttemptAt = Date.now() + SCORE_SYNC_RETRY_DELAY_MS * (2 ** Math.max(0, entry.attempts - 1));
+      persistOutboxEntry(entry);
+      updateScoreRecord(entry);
+      pumpScoreOutbox();
+    }
+  } else if (payload.type === "load_rankings" && payload.requestId === state.rankings.requestId) {
+    state.rankings.status = "error";
+    state.rankings.message = t("rankingTimeout");
+    renderCloudRankings();
+  } else if (payload.type === "load_progress" && payload.requestId === state.progress.requestId) {
+    state.progress.status = "error";
+    state.progress.message = t("progressFailed");
+    state.progress.settings.ok = false;
+    renderProgress();
+  } else if (payload.type === "save_user_settings" && payload.requestId === state.progress.settingsRequestId) {
+    state.progress.settingsPending = false;
+    state.progress.settingsRequestId = "";
+    state.progress.settings.ok = false;
+    state.progress.settings.message = t("settingsUnconfirmed");
+    renderProgress();
+    requestProgress({ force: true });
+  }
 }
 
 function buildScoreSyncPayload(session, summary, retryMode = "") {
@@ -2645,6 +3016,13 @@ function renderReview() {
 }
 
 function renderCloudRankings() {
+  if (state.progress.settingsPending || state.progress.settingsUncertain) {
+    els.rankingRefreshButton.disabled = true;
+    els.rankingStatus.textContent = t("rankingVisibilityUpdating");
+    els.rankingList.replaceChildren();
+    requestFrameHeightSync();
+    return;
+  }
   const tab = state.rankings.activeTab || "overall";
   els.rankingTabs.forEach((button) => {
     const selected = button.dataset.rankingTab === tab;
@@ -2653,8 +3031,8 @@ function renderCloudRankings() {
   });
 
   if (state.rankings.status === "loading") {
-    els.rankingRefreshButton.disabled = false;
-    els.rankingRefreshButton.textContent = t("rankingRetry");
+    els.rankingRefreshButton.disabled = true;
+    els.rankingRefreshButton.textContent = t("rankingLoadingShort");
     els.rankingStatus.textContent = state.rankings.message || t("rankingLoading");
     els.rankingList.replaceChildren(createRankingMessage(t("rankingLoadingShort")));
     requestFrameHeightSync();
@@ -2671,7 +3049,7 @@ function renderCloudRankings() {
   }
   if (state.rankings.status === "unavailable" || state.rankings.status === "error") {
     els.rankingStatus.textContent = state.rankings.message || t("rankingFailedMessage");
-    els.rankingList.replaceChildren(createRankingMessage(t("rankingSecretHint")));
+    els.rankingList.replaceChildren(createRankingMessage(t("connectionRetry")));
     requestFrameHeightSync();
     return;
   }
@@ -2702,7 +3080,7 @@ function createRankingMessage(message) {
 function createRankingItem(row) {
   const item = document.createElement("article");
   item.className = "ranking-item";
-  item.classList.toggle("is-current", Boolean(row.isCurrentUser));
+  item.classList.toggle("is-current", row.user === currentUserName());
   const rank = document.createElement("div");
   rank.className = "ranking-rank";
   rank.textContent = String(row.rank);
@@ -2711,7 +3089,7 @@ function createRankingItem(row) {
   const name = document.createElement("strong");
   name.textContent = row.user;
   const note = document.createElement("p");
-  note.textContent = row.isCurrentUser ? t("currentUser") : "";
+  note.textContent = row.user === currentUserName() ? t("currentUser") : "";
   user.append(name, note);
   const points = document.createElement("div");
   points.className = "ranking-points";
@@ -2729,9 +3107,240 @@ function rankingTabLabel(tab) {
   }[tab] || t("rankingOverall");
 }
 
-function renderHistory() {
+function currentUserName() {
+  return String(state.settings.userName || "").trim();
+}
+
+function createEmptyProgressState() {
+  return {
+    status: "idle", requestId: "", user: "", targetLang: "", message: "", loadedAt: 0,
+    updatedAt: "", totals: { overall: 0, vocab: 0, sentence: 0 },
+    categories: { vocab: [], sentence: [] },
+    settings: { ok: false, rankingPublic: true, message: "" },
+    settingsPending: false, settingsUncertain: false, settingsRequestId: "",
+  };
+}
+
+function invalidateAccountData() {
+  state.progress = createEmptyProgressState();
+  state.rankings = createEmptyRankingsState();
+  bridgeQueue.discardPending((payload) => ["load_progress", "load_rankings"].includes(payload.type));
+}
+
+function changeCurrentUser(value) {
+  const user = String(value || "").trim();
+  if (user === currentUserName()) return;
+  state.settings.userName = user;
+  invalidateAccountData();
+  els.userName.value = user;
+  saveSettings();
+  if (state.currentView === "history") renderHistory();
+}
+
+function requestProgress({ force = false } = {}) {
+  const user = currentUserName();
+  if (!user || !IS_STREAMLIT_COMPONENT) {
+    state.progress.status = user ? "unavailable" : "idle";
+    state.progress.settings.ok = false;
+    renderProgress();
+    return;
+  }
+  const targetLang = state.mobileConfig.targetLang;
+  if (state.progress.user !== user || state.progress.targetLang !== targetLang) {
+    state.progress = createEmptyProgressState();
+    bridgeQueue.discardPending((payload) => payload.type === "load_progress");
+  }
+  if (state.progress.status === "loading" || state.progress.settingsPending) return;
+  if (!force && isAccountCacheFresh(state.progress, { user, targetLang, ttlMs: RANKING_CACHE_TTL_MS })) {
+    renderProgress();
+    return;
+  }
+  Object.assign(state.progress, {
+    status: "loading", requestId: createId(), user, targetLang: state.mobileConfig.targetLang,
+    message: t("progressLoading"),
+  });
+  state.progress.settings.ok = false;
+  renderProgress();
+  bridgeQueue.enqueue({
+    type: "load_progress", requestId: state.progress.requestId, user,
+    targetLang: state.mobileConfig.targetLang,
+  });
+}
+
+function handleProgressResult(result) {
+  if (!isPlainObject(result) || result.type !== "progress_result") return;
+  bridgeQueue.accept(result);
+  if (!matchesAccountResult(result, state.progress, currentUserName(), state.mobileConfig.targetLang)) return;
+  state.progress.requestId = "";
+  state.progress.status = result.ok ? "ready" : "error";
+  state.progress.message = String(result.message || t(result.ok ? "progressReady" : "progressFailed"));
+  state.progress.updatedAt = String(result.updatedAt || "");
+  state.progress.loadedAt = result.ok ? Date.now() : 0;
+  if (result.ok) {
+    state.progress.totals = Object.fromEntries(["overall", "vocab", "sentence"].map((key) =>
+      [key, finiteNumber(result.totals?.[key], 0)]));
+    const categories = (items, nested = false) => (Array.isArray(items) ? items : [])
+      .filter(isPlainObject).map((item) => ({
+        key: String(item.key || ""), points: finiteNumber(item.points, 0),
+        attempts: clampInteger(item.attempts, 0, 99999999, 0),
+        subtopics: nested ? categories(item.subtopics) : [],
+      }));
+    state.progress.categories = {
+      vocab: categories(result.categories?.vocab), sentence: categories(result.categories?.sentence, true),
+    };
+  }
+  state.progress.settings = {
+    ok: result.settings?.ok === true && typeof result.settings.rankingPublic === "boolean",
+    rankingPublic: result.settings?.rankingPublic === true,
+    message: String(result.settings?.message || ""),
+  };
+  if (state.progress.settings.ok && state.progress.settingsUncertain) {
+    state.progress.settingsUncertain = false;
+    requestRankings({ force: true });
+  }
+  renderProgress();
+}
+
+function saveRankingVisibility() {
+  const progress = state.progress;
+  if (!progress.settings.ok || progress.settingsPending || !currentUserName()
+      || progress.user !== currentUserName() || progress.targetLang !== state.mobileConfig.targetLang) {
+    renderProgress();
+    return;
+  }
+  const rankingPublic = els.rankingPublic.checked;
+  progress.settingsPending = true;
+  progress.settingsUncertain = true;
+  bridgeQueue.discardPending((payload) => payload.type === "load_rankings");
+  state.rankings = createEmptyRankingsState();
   renderCloudRankings();
-  if (!state.history.length) {
+  progress.settingsRequestId = createId();
+  progress.settings.message = t("settingsSaving");
+  renderProgress();
+  bridgeQueue.enqueue({
+    type: "save_user_settings", requestId: progress.settingsRequestId,
+    user: currentUserName(), targetLang: state.mobileConfig.targetLang, rankingPublic,
+  });
+}
+
+function handleUserSettingsResult(result) {
+  if (!isPlainObject(result) || result.type !== "user_settings_result") return;
+  bridgeQueue.accept(result);
+  const progress = state.progress;
+  if (!matchesAccountResult(result, { ...progress, requestId: progress.settingsRequestId },
+    currentUserName(), state.mobileConfig.targetLang)) return;
+  progress.settingsPending = false;
+  progress.settingsRequestId = "";
+  const confirmed = result.ok === true && typeof result.rankingPublic === "boolean";
+  progress.settings.ok = confirmed;
+  if (confirmed) {
+    progress.settings.rankingPublic = result.rankingPublic;
+    progress.settingsUncertain = false;
+  }
+  progress.settings.message = String(result.message || t(confirmed ? "settingsSaved" : "settingsFailed"));
+  if (confirmed) {
+    state.rankings.loadedAt = 0;
+    state.progress.loadedAt = 0;
+    // Remove any now-obsolete list immediately, including a ranking request queued before this change.
+    bridgeQueue.discardPending((payload) => payload.type === "load_rankings");
+    state.rankings = createEmptyRankingsState();
+    requestRankings({ force: true });
+  }
+  renderProgress();
+  if (!confirmed) requestProgress({ force: true });
+}
+
+function renderProgress() {
+  const progress = state.progress;
+  const hasUser = Boolean(currentUserName());
+  const accountMatches = progress.user === currentUserName() && progress.targetLang === state.mobileConfig.targetLang;
+  els.progressRefreshButton.disabled = !hasUser || !IS_STREAMLIT_COMPONENT
+    || progress.status === "loading" || progress.settingsPending;
+  els.rankingPublic.disabled = !hasUser || !IS_STREAMLIT_COMPONENT
+    || !accountMatches || !progress.settings.ok || progress.settingsPending;
+  // Keep displaying the last server-confirmed choice while the mutation is pending.
+  els.rankingPublic.checked = accountMatches && progress.settings.ok ? progress.settings.rankingPublic : false;
+  els.rankingPublic.indeterminate = !accountMatches || !progress.settings.ok;
+  els.rankingSettingsStatus.textContent = (accountMatches ? progress.settings.message : "")
+    || (!hasUser ? t("progressNeedsUser") : !IS_STREAMLIT_COMPONENT ? t("progressUnavailable")
+      : !progress.settings.ok ? t("settingsNotLoaded") : "");
+  els.rankingSettingsStatus.classList.toggle("is-error", Boolean(hasUser && progress.status === "error"));
+  const status = !hasUser ? t("progressNeedsUser")
+    : !IS_STREAMLIT_COMPONENT ? t("progressUnavailable")
+      : progress.status === "idle" ? t("progressPrompt") : progress.message;
+  els.progressStatus.textContent = status;
+  if (progress.status !== "ready" || !accountMatches) {
+    els.progressContent.replaceChildren();
+    requestFrameHeightSync();
+    return;
+  }
+  const summary = document.createElement("div");
+  summary.className = "progress-totals";
+  [["overall", t("allFields")], ["vocab", modeLabel("vocab")], ["sentence", modeLabel("sentence")]].forEach(([key, label]) => {
+    const item = document.createElement("div");
+    const title = document.createElement("span");
+    title.textContent = label;
+    const points = document.createElement("strong");
+    points.textContent = `${progress.totals[key].toFixed(1)}${currentLangMeta().pointUnit}`;
+    item.append(title, points);
+    summary.append(item);
+  });
+  const sections = [summary];
+  for (const mode of ["vocab", "sentence"]) {
+    const section = document.createElement("section");
+    section.className = "progress-breakdown";
+    const heading = document.createElement("h4");
+    heading.textContent = t(mode === "vocab" ? "vocabBreakdown" : "sentenceBreakdown");
+    section.append(heading);
+    const rows = progress.categories[mode];
+    if (!rows.length) {
+      const empty = document.createElement("p");
+      empty.className = "muted-text";
+      empty.textContent = t("progressEmpty");
+      section.append(empty);
+    }
+    rows.forEach((row) => {
+      const label = row.key ? mode === "vocab" ? labelForPos(row.key) : row.key : t("uncategorized");
+      if (mode === "sentence" && row.subtopics.length) {
+        const details = document.createElement("details");
+        const title = document.createElement("summary");
+        title.append(createProgressRow(row, label));
+        details.append(title);
+        row.subtopics.forEach((subtopic) => details.append(createProgressRow(subtopic, subtopic.key || t("uncategorized"))));
+        section.append(details);
+      } else {
+        section.append(createProgressRow(row, label));
+      }
+    });
+    sections.push(section);
+  }
+  els.progressContent.replaceChildren(...sections);
+  requestFrameHeightSync();
+}
+
+function createProgressRow(row, label) {
+  const line = document.createElement("div");
+  line.className = "progress-category-row";
+  const title = document.createElement("span");
+  title.textContent = label;
+  const points = document.createElement("strong");
+  points.textContent = `${row.points.toFixed(1)}${currentLangMeta().pointUnit}`;
+  line.append(title, points);
+  return line;
+}
+
+function renderHistory() {
+  renderProgress();
+  renderCloudRankings();
+  if (document.activeElement !== els.historyUserName) els.historyUserName.value = currentUserName();
+  const records = filterUserHistory(state.history, currentUserName());
+  els.clearHistoryButton.disabled = !records.length;
+  const unsent = state.outbox.filter((entry) => entry.payload.user === currentUserName());
+  els.retryPendingButton.hidden = !unsent.length;
+  els.retryPendingButton.disabled = !unsent.some((entry) => !bridgeQueue.has(entry.payload.requestId));
+  els.outboxStatus.textContent = state.outboxReadFailed ? t("outboxReadFailed")
+    : unsent.length ? formatText("pendingRecords", { count: unsent.length }) : "";
+  if (!records.length) {
     const empty = document.createElement("div");
     empty.className = "history-item";
     empty.innerHTML = `<strong>${escapeHtml(t("historyEmptyTitle"))}</strong><p>${escapeHtml(t("historyEmptyBody"))}</p>`;
@@ -2739,7 +3348,7 @@ function renderHistory() {
     return;
   }
   els.historyList.replaceChildren(
-    ...state.history.map((record) => {
+    ...records.map((record) => {
       const item = document.createElement("article");
       item.className = "history-item";
       const mode = modeLabel(record.mode);
@@ -2747,6 +3356,7 @@ function renderHistory() {
       item.innerHTML = `
         <strong>${escapeHtml(mode)} ${escapeHtml(record.points.toFixed(1))}${escapeHtml(currentLangMeta().pointUnit)}</strong>
         <p>${escapeHtml(date)} / ${escapeHtml(record.correct)}/${escapeHtml(record.total)} ${escapeHtml(t("correct"))} / ${escapeHtml(Math.round(record.accuracy * 100))}%</p>
+        <p class="history-sync-status">${escapeHtml(t({ saved: "recordSaved", pending: "recordPending", error: "recordUnsent", local: "recordLocal" }[record.scoreSyncStatus] || "recordUnknown"))}</p>
       `;
       return item;
     }),
@@ -2991,15 +3601,6 @@ function displayOption(option, direction) {
   return direction === "ja_to_eo" ? option.eo : option.ja;
 }
 
-function targetText(entry) {
-  const translations = isPlainObject(entry?.translations) ? entry.translations : {};
-  return String(
-    translations[state.mobileConfig.targetLang]
-    || translations.ja
-    || entry?.ja
-    || "",
-  ).trim();
-}
 
 function isPromptEsperanto(direction) {
   return direction === "eo_to_ja";
@@ -3169,8 +3770,7 @@ function hasPlayableAudioForMode(mode, option) {
 function hasAudioForMode(mode) {
   return Boolean(state.audioConfig.enabled && (
     getAudioBaseUrl(mode)
-    || hasAudioManifestForMode(mode)
-    || state.audioConfig.useDriveManifest
+    || (state.audioConfig.useDriveManifest && hasAudioManifestForMode(mode))
   ));
 }
 
@@ -3188,7 +3788,7 @@ function getAudioUrls(mode, option) {
     urls.push(encodeURI(`${base}${option.audioKey}.wav`));
   }
   const fileId = getAudioManifestFileId(mode, option.audioKey);
-  if (fileId) {
+  if (state.audioConfig.useDriveManifest && fileId) {
     urls.push(buildDriveAudioUrl(fileId));
   }
   return [...new Set(urls)];

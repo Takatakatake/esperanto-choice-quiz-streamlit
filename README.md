@@ -1,169 +1,97 @@
 # Esperanto 4択学習アプリ
 
-このリポジトリには、既存の Streamlit 版に加えて、スマートフォン向けの `localStorage` 保存型クイズUIがあります。スマホで `app.py`、`sentence_app.py`、中国語版、韓国語版を開くと、Streamlit Cloud上でもこのUIを優先表示します。
+日本語・中国語・韓国語で、エスペラントの単語と例文を学べるアプリです。PCでもスマートフォンでも、これまでのスマホ版をもとにした共通画面を最初から表示します。別のPC版への切替はありません。
 
-## Streamlit Cloudでのスマホ利用
-
-通常どおりStreamlitアプリを起動します。
+## 起動
 
 ```bash
+python3 -m pip install -r requirements.txt
 streamlit run app.py
 ```
 
-スマートフォンのUser-Agentで開くと、`mobile_app/` のUIがStreamlitコンポーネントとして表示されます。PCから確認したい場合は次のURLで強制表示できます。
+6つの起動ファイルは同じ画面と保存処理を使います。
 
-```text
-http://127.0.0.1:8501/?mobile_app=1
-```
+| 言語 | 単語から開始 | 例文から開始 |
+|---|---|---|
+| 日本語 | `app.py` | `sentence_app.py` |
+| 中国語 | `app_Cxina_versio.py` | `sentence_app_Cxina_versio.py` |
+| 韓国語 | `app_Korea_versio.py` | `sentence_app_Korea_versio.py` |
 
-従来のStreamlit版へ戻る場合:
+`?quiz=vocab` / `?quiz=sentence` で開始モードを指定できます。以前の `?classic=1` や `?mobile_app=1` のURLも共通画面を開きます。画面内で単語・例文を切り替えられ、各言語版へのリンクは現在のモードを引き継いで新しいタブで開きます。
 
-```text
-http://127.0.0.1:8501/?classic=1
-```
+## 名前と学習記録
 
-## スマホ向けUIの特徴
+ユーザー名だけで利用でき、登録・パスワードはありません。同じ名前を入力すると、別の端末でも保存済みの学習記録を確認できます。名前は前後の空白を除いて一致させ、大文字・小文字は区別します。
 
-- 単語クイズと例文クイズに対応
-- 日本語版に加えて、中国語版・韓国語版の単語/例文アプリでも同じスマホUIを使い、出題方向に応じて日本語・中文・한국어の翻訳を切り替え
-- スマホ版の画面下部から日本語版・中国語版・韓国語版へ移動でき、単語/例文の現在モードもURLで引き継ぎます。Streamlitコンポーネントのiframe制約を避けるため、スマホ版内のアプリ間リンクは新しいタブで開きます。
-- スマホ版からPC/従来版へ、PC/従来版からスマホ版へ移動するリンクを用意しています。スマホ版内のPC/スマホ切替リンクも新しいタブで開きます。
-- 回答ごとに進行状態、回答履歴、得点、復習対象を端末内の `localStorage` へ自動保存
-- Streamlitの再読み込みやセッション切れ後も、同じ端末・同じブラウザなら進行中のクイズを復元
-- 進行中クイズがある場合は、設定画面に「続きから再開」を表示し、新規開始による上書き前に確認
-- スマホ幅で読みやすい文字サイズ、下部配置の大きい選択肢ボタン
-- 成績履歴は端末内に保存。Streamlit Cloud内では結果画面の「ランキングに保存」からGoogle Sheetsの累積得点・ランキングにも加算
-- Streamlit Cloud内のスマホ版成績画面では、Google Sheetsの累積・本日・今月・殿堂ランキングを確認できます。
-- スマホ版の下部ナビに診断画面を用意し、データ件数、音声設定、保存状態、ランキング通信状態、端末保存使用量を確認できます。
-- 診断画面では、単語・例文のサンプル音声を実際に再生して、スマホ実機で音声配信が通るか確認できます。
-- 端末保存容量が不足した場合は、進行中クイズの保存を優先し、古い端末内成績履歴を自動整理します。
-- スマホ版でも音声再生に対応。Streamlit Cloudでは `mobile_app/audio/` と `mobile_app/sentence-audio/` をコンポーネント配下から同一オリジン配信し、Google Drive manifestはフォールバックとして使います。
-- 音声は、画面に表示されているテキストがエスペラントのときだけ再生します。エスペラント→日本語では問題文を自動再生し、日本語→エスペラントでは日本語問題文を読まず、エスペラントの選択肢音声だけ再生できます。
-- 再生した音声はPWAのランタイムキャッシュに保存しますが、肥大化を避けるため古い音声キャッシュは自動で整理されます。
-- 結果画面の復習リストでは、間違えた問題のエスペラント正解音声を手動再生できます。
-- スコア保存中に再読み込みされた場合や、スコアログ保存後に累積更新だけ失敗した場合も、同じ `save_id` で安全に再送し、Google Sheets側の重複加算を防ぎます。
+- 名前を入力して始めたクイズは、完了時にGoogle Sheetsへ自動保存します。名前なしでもクイズは利用できますが、その結果は端末内だけに残ります。
+- 学習記録画面では、全体・単語・例文の累積点、単語の品詞別得点、例文のテーマ・小テーマ別得点を表示します。分野ごとの回数は保存済みクイズの回数です。
+- 進行中の問題、回答、復習対象は回答ごとに端末の `localStorage` へ保存します。同じブラウザで再読み込みしても続きから再開でき、新しく始めるときは進行中のクイズの上書きを確認します。
+- 端末内の直近100件の履歴と、Google Sheetsの全保存履歴から計算する累積点は別です。古い端末内履歴を整理しても、保存済みの累積点は失われません。
 
-## 静的PWAとしての単独起動
+未送信の結果は、現在のクイズや直近履歴とは独立した永続送信待ちリスト（outbox）に、`save_id` ごとに保存します。再読み込み・次のクイズの開始・名前の切替後も、元の名前と同じIDで再送します。保存の確認応答が届くと、結果本体を小さな保存済み記録（receipt）に置き換え、別タブによる再登録を抑えます。旧outboxの配列は全件の移行を確認するまで保持します。 receiptを書き込めない場合も、端末に保存済みのセッション・履歴と名前・保存ID・得点を照合して保存確認を復元し、保存済み表示を維持します。
 
-起動:
+通信タイムアウト時は間隔を空けて再試行し、結果画面や学習記録画面からの再試行にも対応します。端末への保存に失敗した場合は完了結果を維持し、次のクイズによる上書きを止めます。ブラウザの保存データを手動で消すと、未送信の記録も失われます。
+
+## ランキングの公開設定
+
+学習記録画面の「ランキングに表示する」で掲載を切り替えられます。非表示にしても学習記録は保存し続け、名前を入力すれば進捗を閲覧できます。
+
+ここでの非公開は、累積・本日・今月・殿堂のランキング一覧に掲載しないという意味です。パスワードがないため、その名前を知る人は記録の閲覧・得点の追加・公開設定の変更ができます。この運用を前提とした名前による識別です。
+
+公開設定の書込み後に応答が途切れた場合は、読み取りによる確認だけを再試行します。後から行った設定変更を、古い要求の再送で上書きしません。
+
+公開設定は同じスプレッドシートの `UserSettings` に保存します。設定行がない名前は公開が初期値です。ただし、設定シートを読めない、必要な列がない、公開値が不正などの場合はランキングを表示しません。非表示ユーザーを除外してから順位を付け、そのユーザー自身の行も一覧に追加しません。
+
+## 保存データと旧版からの引継ぎ
+
+既存の `Scores` を学習記録の正本として維持します。進捗は全保存ログを `save_id` で重複排除して集計します。古い行は既存のモード推定を使い、品詞が空なら `group_id` の接頭辞から補います。分野を判断できない行は未分類に含め、得点を捨てません。`UserStats` / `UserStatsSentence` は累積ランキング用の集計シートです。
+
+旧PC版の端末保存を検出すると、引継ぎの案内を表示します。「この画面に引き継ぐ」を選んだ場合だけ変換し、旧版の保存原文は残します。既存のモバイル版の保存がある場合はそちらを優先し、上書きしません。引き継いだ旧完了結果の保存状態が不明な場合は閲覧専用とし、重複加算を防ぐため再送しません。
+
+## 音声と静的PWA
+
+音声は `mobile_app/audio/` と `mobile_app/sentence-audio/` から同一オリジンで配信し、Google Drive manifestをフォールバックに使います。通常、追加の音声Secretsは不要です。問題文の自動再生はユーザーの操作後に限り、エスペラントの問題文・選択肢・復習の正解を再生します。診断画面で単語・例文の音声を試せます。
+
+静的PWAだけを起動する場合:
 
 ```bash
 python3 -m http.server 8765
 ```
 
-ブラウザで開く:
+`http://127.0.0.1:8765/mobile_app/` を開きます。静的PWAはアプリ・JSON・音声をキャッシュし、端末内のクイズ保存を利用できます。Google Sheetsへの保存、名前別累積、公開設定、ランキングにはStreamlit経由のオンライン版を使います。
 
-```text
-http://127.0.0.1:8765/mobile_app/
-```
-
-特徴:
-
-単独起動時はPWAのサービスワーカーでアプリ本体とJSONデータをキャッシュします。
-
-既存CSVやスマホ版のJavaScript/UIを更新した後は、PWA用JSONを再生成し、診断画面用の `APP_VERSION` も更新します。
+CSVを更新したらJSONを再生成します。以下のバージョン文字列は例です。
 
 ```bash
-npm run build:mobile -- 2026-06-06-mobile-data-1
+npm run build:mobile -- 2026-09-06-unified-learning
+# Drive音声の対応表も更新する場合
+npm run build:mobile -- 2026-09-06-unified-learning --with-drive-manifest
 ```
 
-単語/例文JSONには、互換用の日本語訳に加えて `translations.ja`、`translations.zh`、`translations.ko` を含めます。例文データはCSV上の5000件をすべて含めます。同じエスペラント文・同じ翻訳の行も出題対象に残しつつ、4択の誤答候補では対象言語で同一表示の選択肢を避けます。
-
-Google Driveフォールバックmanifestも同時に更新する場合:
+JavaScript・CSSなど画面だけを変更した場合は、データを再生成せずアプリバージョンを更新します。
 
 ```bash
-npm run build:mobile -- 2026-06-06-mobile-data-1 --with-drive-manifest
+npm run version:mobile -- 2026-09-06-unified-learning
 ```
 
-JSONだけ、またはバージョンだけを個別に更新したい場合は、従来通り `python3 tools/build_mobile_data.py` と `npm run version:mobile -- <version>` も使えます。
+どちらの場合も、PWAに更新を届けるため `mobile-sw.js` の `CACHE_VERSION` を新しい値に変更します。上記コマンドが更新するのは `APP_VERSION` です。
 
-## スマホ版で音声を使う場合
+JSONは `translations.ja` / `translations.zh` / `translations.ko` を含み、対象言語で同じ表示になる誤答選択肢を避けます。音声キャッシュは上限を設け、古いものから整理します。
 
-Streamlit Cloud内蔵のスマホ版では、`mobile_app/audio/` と `mobile_app/sentence-audio/` の音声ファイルを直接再生します。Google Drive直リンクはスマホブラウザやiframe内で不安定になる場合があるため、現在は同一オリジン配信を優先し、`mobile_app/data/audio_manifest.json` はフォールバックとして使います。Streamlit CloudのSecrets追加は不要です。
-
-音声設定が「問題を自動再生」または「問題自動＋選択肢」のとき、クイズ開始や次問への移動がユーザー操作から発生した場合だけ、エスペラントの問題文を自動再生します。再読み込み復元のようにユーザー操作がない場面では、スマホブラウザの自動再生制限を避けるため手動の音声ボタンを使います。
-
-Driveフォルダの中身を更新した場合は、必要に応じて次を実行してフォールバック用の対応表を再生成します。
-
-```bash
-python3 tools/build_drive_audio_manifest.py
-```
-
-必要な場合だけ、Streamlit CloudのSecretsで外部配信URLを上書きできます。
-
-```toml
-[mobile_audio]
-drive_download_base_url = "https://drive.google.com/uc?export=download&id="
-vocab_base_url = "https://example.com/audio/"
-sentence_base_url = "https://example.com/sentence-audio/"
-```
-
-`vocab_base_url` / `sentence_base_url` は、Cloud Storageなどで `<base_url>/<audioKey>.wav` として配信する場合だけ指定します。
-
-## 検証
-
-Python側のスコア保存・ランキング集計の単体テスト:
+## 検証と運用
 
 ```bash
 npm run test:unit
-```
-
-スマホ用JSON、CSV、音声ファイル、Google Driveフォールバックmanifestの整合性検証:
-
-```bash
+npm run test:client
 npm run validate:mobile-assets
 ```
 
-WAVヘッダ確認を省いた高速確認:
+ブラウザ検証には、実際の保存・進捗・公開設定処理をメモリ内の仮シートで動かすローカル専用fixtureを用意しています。
 
 ```bash
-npm run validate:mobile-assets:quick
+streamlit run tests/fixtures/learning_app.py --server.address 127.0.0.1 --server.port 8502
 ```
 
-静的PWA版の再読み込み復元、結果・履歴、保存データ復旧テスト:
+GitHub ActionsではPython・JavaScriptのテストに加え、隔離した仮シートとChromiumでブラウザー回帰テストも実行します。
 
-```bash
-npm install
-python3 -m http.server 8765
-npm run test:mobile
-```
-
-Streamlit Cloud相当のコンポーネント表示、再読み込み復元、結果・履歴テスト:
-
-```bash
-npm install
-streamlit run app.py --server.port 8501 --server.headless true
-npm run test:streamlit-mobile
-```
-
-初回だけPlaywrightブラウザが必要です。
-
-```bash
-npx playwright install chromium
-```
-
-## Streamlit版
-
-既存のPC向けStreamlitアプリは残しています。`app.py` 系をデプロイしたURLでも、PC/従来版では上部の「PC版モード」から単語版・例文版・スマホ版へ移動できます。
-
-日本語版・中国語版・韓国語版のPC/従来版では、進行中のクイズ状態をブラウザの `localStorage` に保存し、Streamlitセッション切れ後に「途中から再開」を選べます。保存先は端末内のみで、途中状態はGoogle Sheetsへ送信しません。
-
-```text
-https://esperanto-quiz.streamlit.app/?quiz=vocab&classic=1
-https://esperanto-quiz.streamlit.app/?quiz=sentence&classic=1
-https://esperanto-quiz-ko.streamlit.app/?quiz=vocab&classic=1
-https://esperanto-quiz-ko.streamlit.app/?quiz=sentence&classic=1
-https://esperanto-quiz-zh.streamlit.app/?quiz=vocab&classic=1
-https://esperanto-quiz-zh.streamlit.app/?quiz=sentence&classic=1
-```
-
-単独ファイルとして起動する運用も引き続き可能です。
-
-```bash
-streamlit run app.py
-streamlit run sentence_app.py
-streamlit run app_Cxina_versio.py
-streamlit run app_Korea_versio.py
-streamlit run sentence_app_Cxina_versio.py
-streamlit run sentence_app_Korea_versio.py
-```
+実シートや認証情報は使いません。`Review-A` は公開、`Review-B` は非公開です。起動・ブラウザテストの詳細は [tests/README.md](tests/README.md)、Google Sheetsのスキーマ・Secrets・デプロイ手順は [DEPLOY.md](DEPLOY.md) を参照してください。

@@ -5,6 +5,7 @@ from score_sync_service import (
     update_totals_for_record,
 )
 from score_row_utils import SENTENCE_MODE, VOCAB_MODE, normalize_mode, normalize_score_row
+from user_settings import normalize_user
 
 
 def _safe_float(value, default=0.0):
@@ -39,9 +40,9 @@ _MESSAGES = {
         "ko": "저장 요청 형식이 올바르지 않습니다.",
     },
     "need_user": {
-        "ja": "保存するにはユーザー名が必要です。",
-        "zh": "保存分数需要先输入用户名。",
-        "ko": "저장하려면 사용자명이 필요합니다.",
+        "ja": "保存するには有効なユーザー名が必要です。",
+        "zh": "保存分数需要先输入有效的用户名。",
+        "ko": "저장하려면 올바른 사용자 이름이 필요합니다.",
     },
     "no_result": {
         "ja": "保存できるクイズ結果がありません。",
@@ -59,9 +60,9 @@ _MESSAGES = {
         "ko": "점수 로그는 저장되었습니다. 누적 점수 업데이트만 실패했으므로 다시 누르면 같은 저장 ID로 안전하게 다시 업데이트됩니다.",
     },
     "saved": {
-        "ja": "ランキングに保存しました。今回の{points:.1f}点を累積得点に加算済みです。",
-        "zh": "已保存到排行榜。本次 {points:.1f} 分已计入累计得分。",
-        "ko": "랭킹에 저장했습니다. 이번에 얻은 {points:.1f}점은 누적 점수에 반영되었습니다.",
+        "ja": "学習記録を保存しました。今回の{points:.1f}点を累積得点に加算済みです。",
+        "zh": "已保存学习记录。本次 {points:.1f} 分已计入累计得分。",
+        "ko": "학습 기록을 저장했습니다. 이번에 얻은 {points:.1f}점은 누적 점수에 반영되었습니다.",
     },
 }
 
@@ -94,7 +95,7 @@ def _score_result(payload, *, ok, message, warning=None, recoverable=""):
 def _build_record(payload):
     mode = normalize_mode(payload.get("mode"), fallback=VOCAB_MODE)
     save_id = str(payload.get("saveId") or "").strip() or f"mobile-{uuid.uuid4()}"
-    user = str(payload.get("user") or "").strip()
+    user = normalize_user(payload.get("user"))
     levels = payload.get("levels")
     if isinstance(levels, (list, tuple)):
         levels = ",".join(str(level) for level in levels)
@@ -168,7 +169,7 @@ def save_mobile_score_request(payload):
     if not isinstance(payload, dict) or payload.get("type") != "save_score":
         return _score_result({}, ok=False, message=_msg(payload, "bad_request"))
 
-    user = str(payload.get("user") or "").strip()
+    user = normalize_user(payload.get("user"))
     if not user:
         return _score_result(payload, ok=False, message=_msg(payload, "need_user"))
 

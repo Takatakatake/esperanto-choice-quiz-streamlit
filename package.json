@@ -6,6 +6,7 @@
     "validate:mobile-assets": "python3 tools/validate_mobile_assets.py",
     "validate:mobile-assets:quick": "python3 tools/validate_mobile_assets.py --quick",
     "test:unit": "python3 -m unittest discover -s tests -p 'test_*.py'",
+    "test:client": "node --test tests/*.test.mjs",
     "test:mobile": "node node_modules/@playwright/test/cli.js test tests/mobile-pwa.spec.js --browser=chromium",
     "test:streamlit-mobile": "node node_modules/@playwright/test/cli.js test tests/streamlit-mobile.spec.js --browser=chromium",
     "serve:mobile": "python3 -m http.server 8765"

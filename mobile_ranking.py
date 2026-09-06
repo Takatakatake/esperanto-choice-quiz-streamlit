@@ -2,6 +2,7 @@ import datetime
 
 from score_append_utils import load_sheet_records
 from ranking_utils import HOF_THRESHOLD, RANKING_TOP_N, ranking_rows, summarize_rankings_from_stats
+from user_settings import load_ranking_visibility, normalize_user
 
 
 SCORES_SHEET = "Scores"
@@ -17,9 +18,14 @@ _MESSAGES = {
         "ko": "랭킹 요청 형식이 올바르지 않습니다.",
     },
     "fetch_failed": {
-        "ja": "ランキングを取得できませんでした。Secrets設定とSheets共有権限を確認してください。",
-        "zh": "无法获取排行榜。请检查 Secrets 配置和表格的共享权限。",
-        "ko": "랭킹을 가져오지 못했습니다. Secrets 설정과 시트 공유 권한을 확인해 주세요.",
+        "ja": "ランキングを取得できませんでした。時間をおいて再読み込みしてください。",
+        "zh": "无法获取排行榜。请稍后重新加载。",
+        "ko": "랭킹을 가져오지 못했습니다. 잠시 후 다시 불러와 주세요.",
+    },
+    "settings_failed": {
+        "ja": "公開設定を確認できないためランキングを表示できません。時間をおいて再読み込みしてください。",
+        "zh": "无法确认公开设置，因此暂时不能显示排行榜。请稍后重新加载。",
+        "ko": "공개 설정을 확인하지 못해 랭킹을 표시할 수 없습니다. 잠시 후 다시 불러와 주세요.",
     },
     "shown": {
         "ja": "ランキングを表示しました。",
@@ -55,6 +61,7 @@ def _ranking_result(payload, *, ok, message, rankings=None, own=None, source="un
     return {
         "type": "rankings_result",
         "requestId": str(payload.get("requestId", "")),
+        "user": normalize_user(payload.get("user")),
         "ok": bool(ok),
         "message": message,
         "source": source,
@@ -68,9 +75,13 @@ def load_mobile_rankings_request(payload):
     if not isinstance(payload, dict) or payload.get("type") != "load_rankings":
         return _ranking_result({}, ok=False, message=_msg(payload, "bad_request"))
 
-    user = str(payload.get("user") or "").strip()
+    user = normalize_user(payload.get("user"))
+    visibility = load_ranking_visibility()
+    if visibility is None:
+        return _ranking_result(payload, ok=False, message=_msg(payload, "settings_failed"))
+
     stats_rows = load_sheet_records(USER_STATS_SHEET, refresh=True)
-    score_rows = load_sheet_records(SCORES_SHEET, refresh=True)
+    score_rows = load_sheet_records(SCORES_SHEET, refresh=True, required_headers=("user", "points"))
 
     if stats_rows is None and score_rows is None:
         return _ranking_result(
@@ -83,6 +94,13 @@ def load_mobile_rankings_request(payload):
         stats_rows or [],
         score_rows=score_rows or [],
         hof_threshold=HOF_THRESHOLD,
+    )
+
+    # Filter before ranking so private accounts neither appear in any list nor
+    # consume a rank. This also excludes the current user's appended own row.
+    overall_totals, today_totals, month_totals, hof_totals = (
+        {name: points for name, points in totals.items() if visibility.get(name, True)}
+        for totals in (overall_totals, today_totals, month_totals, hof_totals)
     )
 
     overall_rows, own_overall = ranking_rows(overall_totals, current_user=user, top_n=RANKING_TOP_N)

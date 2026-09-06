@@ -76,8 +76,31 @@ class MobileScoreSyncTests(unittest.TestCase):
         append_score.assert_not_called()
         update_totals.assert_not_called()
 
+    @patch.object(mobile_score_sync, "_update_totals")
+    @patch.object(mobile_score_sync, "_append_score")
+    def test_save_rejects_names_that_cannot_read_progress_or_change_visibility(self, append_score, update_totals):
+        for user in ("Audit\tUser", "Audit\nUser", "Audit\x7fUser", 12, {}, ["Alice"]):
+            with self.subTest(user=user):
+                result = mobile_score_sync.save_mobile_score_request(score_payload(user=user))
+                self.assertFalse(result["ok"])
+        append_score.assert_not_called()
+        update_totals.assert_not_called()
+
+    @patch.object(mobile_score_sync, "_update_totals", return_value=(True, True))
+    @patch.object(mobile_score_sync, "_append_score", return_value=True)
+    def test_valid_name_keeps_case_unicode_and_existing_length(self, append_score, update_totals):
+        user = "Alice-Ĉ" + "名" * 40
+        result = mobile_score_sync.save_mobile_score_request(score_payload(user=f"  {user}  "))
+        self.assertTrue(result["ok"])
+        self.assertEqual(append_score.call_args[0][0]["user"], user)
+
 
 class MobileRankingTests(unittest.TestCase):
+    def setUp(self):
+        visibility_patch = patch.object(mobile_ranking, "load_ranking_visibility", return_value={})
+        self.visibility = visibility_patch.start()
+        self.addCleanup(visibility_patch.stop)
+
     def test_score_log_totals_deduplicates_save_id_and_uses_jst_dates(self):
         rows = [
             {"user": "A", "points": "10", "ts": "2026-05-12T15:30:00Z", "save_id": "same"},
@@ -92,7 +115,7 @@ class MobileRankingTests(unittest.TestCase):
         self.assertEqual(today, {"A": 10.0})
         self.assertEqual(month, {"A": 10.0, "B": 5.0})
 
-    def test_summarize_rankings_merges_user_stats_with_scores_by_max_total(self):
+    def test_partial_legacy_logs_do_not_erase_larger_existing_ranking_totals(self):
         stats_rows = [
             {"user": "A", "total_points": "100"},
             {"user": "B", "total_points": "20"},
@@ -111,6 +134,27 @@ class MobileRankingTests(unittest.TestCase):
         self.assertEqual(hof, {"A": 100.0})
         self.assertEqual([row["user"] for row in rows], ["A", "C"])
         self.assertEqual(current["user"], "C")
+
+    def test_a_zero_point_log_does_not_prove_historical_total_is_zero(self):
+        totals, _, _, hof = summarize_rankings_from_stats(
+            [{"user": "A", "total_points": 2_000_000}],
+            score_rows=[{"user": "A", "points": 0}],
+        )
+        self.assertEqual(totals, {"A": 2_000_000})
+        self.assertEqual(hof, {"A": 2_000_000})
+
+    def test_month_ranking_excludes_prior_and_future_months_across_year_boundary(self):
+        rows = [
+            {"user": "A", "points": 1, "ts": "2026-11-30T14:59:59Z"},
+            {"user": "A", "points": 2, "ts": "2026-11-30T15:00:00Z"},
+            {"user": "A", "points": 4, "ts": "2026-12-31T14:59:59Z"},
+            {"user": "A", "points": 8, "ts": "2026-12-31T15:00:00Z"},
+        ]
+        now = datetime.datetime(2026, 12, 31, 12, tzinfo=datetime.timezone(datetime.timedelta(hours=9)))
+        overall, today, month = score_log_totals(rows, now=now)
+        self.assertEqual(overall, {"A": 15})
+        self.assertEqual(today, {"A": 4})
+        self.assertEqual(month, {"A": 6})
 
     @patch.object(mobile_ranking, "load_sheet_records")
     def test_mobile_ranking_request_returns_live_rankings(self, load_sheet_records):
@@ -131,6 +175,7 @@ class MobileRankingTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["requestId"], "rank-1")
+        self.assertEqual(result["user"], "B")
         self.assertEqual(result["source"], "live")
         self.assertEqual(result["rankings"]["overall"][0]["user"], "A")
         self.assertEqual(result["own"]["overall"]["user"], "B")
@@ -146,8 +191,57 @@ class MobileRankingTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["requestId"], "rank-error")
-        self.assertIn("Secrets", result["message"])
+        self.assertIn("再読み込み", result["message"])
         self.assertGreaterEqual(load_sheet_records.call_count, 2)
+
+    @patch.object(mobile_ranking, "load_sheet_records")
+    def test_private_current_user_is_excluded_from_every_public_list(self, load_sheet_records):
+        self.visibility.return_value = {"Private": False, "Public": True}
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        load_sheet_records.side_effect = [
+            [{"user": "Private", "total_points": 3_000_000}, {"user": "Public", "total_points": 2_000_000}],
+            [
+                {"user": "Private", "points": 3_000_000, "ts": now},
+                {"user": "Public", "points": 2_000_000, "ts": now},
+                {"user": "NoPreference", "points": 1_000_000, "ts": now},
+            ],
+        ]
+        result = mobile_ranking.load_mobile_rankings_request({"type": "load_rankings", "user": "Private"})
+        self.assertTrue(result["ok"])
+        for period in ("overall", "today", "month", "hof"):
+            self.assertEqual([row["user"] for row in result["rankings"][period]], ["Public", "NoPreference"])
+            self.assertEqual([row["rank"] for row in result["rankings"][period]], [1, 2])
+            self.assertIsNone(result["own"][period])
+
+    @patch.object(mobile_ranking, "load_sheet_records")
+    def test_unavailable_preferences_do_not_publish_any_cached_or_fallback_ranking(self, load_sheet_records):
+        self.visibility.return_value = None
+        result = mobile_ranking.load_mobile_rankings_request({"type": "load_rankings", "user": "Private"})
+        self.assertFalse(result["ok"])
+        self.assertTrue(all(rows == [] for rows in result["rankings"].values()))
+        self.assertEqual(result["own"], {})
+        self.assertIn("公開設定", result["message"])
+        load_sheet_records.assert_not_called()
+
+    @patch.object(mobile_ranking, "load_sheet_records")
+    def test_private_users_stay_hidden_in_stats_only_fallback(self, load_sheet_records):
+        self.visibility.return_value = {"Private": False}
+        load_sheet_records.side_effect = [[{"user": "Private", "total_points": 100}], None]
+        result = mobile_ranking.load_mobile_rankings_request({"type": "load_rankings", "user": "Private"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source"], "stats_only")
+        self.assertEqual(result["rankings"]["overall"], [])
+
+
+class LearningRecordWordingTests(unittest.TestCase):
+    @patch.object(mobile_score_sync, "_update_totals", return_value=(True, True))
+    @patch.object(mobile_score_sync, "_append_score", return_value=True)
+    def test_saved_record_message_is_independent_of_public_ranking(self, append_score, update_totals):
+        for lang, expected in (("ja", "学習記録"), ("zh", "学习记录"), ("ko", "학습 기록")):
+            with self.subTest(lang=lang):
+                result = mobile_score_sync.save_mobile_score_request(score_payload(targetLang=lang, rankingPublic=False))
+                self.assertTrue(result["ok"])
+                self.assertIn(expected, result["message"])
 
 
 if __name__ == "__main__":
