@@ -53,7 +53,7 @@ class UserProgressTests(unittest.TestCase):
     def test_private_named_account_can_still_read_its_progress(self, load_rows, load_visibility):
         result = user_progress.load_user_progress_request({"type": "load_progress", "requestId": "req1", "user": " alice "})
         self.assertTrue(result["ok"])
-        self.assertEqual(result["user"], "alice")
+        self.assertEqual(result["user"], " alice ")
         self.assertEqual(result["requestId"], "req1")
         self.assertEqual(result["totals"]["overall"], 20)
         self.assertEqual(result["settings"], {"ok": True, "rankingPublic": False, "message": ""})

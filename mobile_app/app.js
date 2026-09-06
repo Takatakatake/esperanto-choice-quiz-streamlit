@@ -9,7 +9,7 @@ import { buildLocalizedQuestion } from "./quiz_questions.mjs";
 import { inspectLegacySession, commitLegacySessionImport, hasClassicMigrationProvenance, isLegacyScoreSaveBlocked } from "./legacy_session_migration.mjs";
 import { addToOutbox, matchesAccountResult, filterUserHistory, SerializedBridge, DurableScoreOutbox, canReplaceSession, persistPresentSession, isAccountCacheFresh, matchesScoreRecord, scoreRecordFromSession, hasConfirmedScoreEvidence } from "./learning_sync.mjs";
 
-const APP_VERSION = "2026-09-06-unified-learning-4";
+const APP_VERSION = "2026-09-06-unified-learning-5";
 const STORAGE_PREFIX = "esperanto-choice-mobile";
 const SESSION_KEY = `${STORAGE_PREFIX}:session:v2`;
 const SETTINGS_KEY = `${STORAGE_PREFIX}:settings:v2`;
@@ -914,6 +914,7 @@ const state = {
   session: null,
   history: [],
   currentView: "loading",
+  lastRenderedQuestionKey: "",
   saveTimer: null,
   frameHeightTimer: null,
   lastFrameHeight: 0,
@@ -1632,7 +1633,28 @@ function installFrameHeightSync() {
   }
   window.addEventListener("resize", requestFrameHeightSync);
   window.visualViewport?.addEventListener("resize", requestFrameHeightSync);
+  const hostWindow = frameViewportWindow();
+  if (hostWindow !== window) {
+    hostWindow.addEventListener("resize", requestFrameHeightSync);
+    hostWindow.visualViewport?.addEventListener("resize", requestFrameHeightSync);
+    window.addEventListener("pagehide", (event) => {
+      if (event.persisted) return;
+      hostWindow.removeEventListener("resize", requestFrameHeightSync);
+      hostWindow.visualViewport?.removeEventListener("resize", requestFrameHeightSync);
+    });
+  }
   requestFrameHeightSync();
+}
+
+function frameViewportWindow() {
+  try {
+    // The component's own viewport is the height we previously requested.
+    // Streamlit's parent viewport is the space actually available on screen.
+    if (window.parent !== window && window.parent.document) return window.parent;
+  } catch (_error) {
+    // A host on another origin cannot expose its viewport to this component.
+  }
+  return window;
 }
 
 function requestFrameHeightSync() {
@@ -1647,9 +1669,10 @@ function syncFrameHeight() {
   if (!IS_STREAMLIT_COMPONENT) {
     return;
   }
-  const viewportHeight = Math.ceil(window.visualViewport?.height || window.innerHeight || 720);
+  const viewportWindow = frameViewportWindow();
+  const viewportHeight = Math.ceil(viewportWindow.visualViewport?.height || viewportWindow.innerHeight || 720);
   const screenHeight = Math.ceil(window.screen?.height || viewportHeight);
-  const interactiveHeight = Math.max(640, Math.min(viewportHeight, screenHeight, 900));
+  const interactiveHeight = viewportHeight;
   const minHeight = Math.max(640, Math.min(viewportHeight, screenHeight));
   const contentHeight = Math.ceil(Math.max(
     document.documentElement.scrollHeight,
@@ -1688,12 +1711,14 @@ function scrollHostToTop() {
       parentDoc.scrollingElement.scrollTop = 0;
     }
   } catch (error) {
-    window.parent?.scrollTo?.(0, 0);
+    // Cross-origin containers do not expose their scrolling APIs. Repeating
+    // the same access in this handler would turn that denial into an error.
+    if (error?.name !== "SecurityError") console.warn("Could not reset the host scroll", error);
   }
   try {
     window.top?.scrollTo({ top: 0, left: 0, behavior: "auto" });
   } catch (error) {
-    window.top?.scrollTo?.(0, 0);
+    if (error?.name !== "SecurityError") console.warn("Could not reset the outer page scroll", error);
   }
 }
 
@@ -1899,7 +1924,22 @@ function writeJson(key, value, { allowRecovery = true } = {}) {
 }
 
 function recoverLocalStorageWrite(key, value, error) {
-  if (!isQuotaExceededError(error)) {
+  if (!isQuotaExceededError(error) || ![SESSION_KEY, HISTORY_KEY].includes(key)) {
+    return false;
+  }
+  try {
+    const rawHistory = window.localStorage.getItem(HISTORY_KEY);
+    const history = rawHistory === null ? [] : JSON.parse(rawHistory);
+    if (!Array.isArray(history)) return false;
+    const outbox = scoreOutboxStorage();
+    for (const record of history) {
+      if (record?.scoreSyncStatus !== "saved") continue;
+      // Without a separate receipt this row may be the only durable proof of
+      // a successful server save. Neither trimming nor deletion may remove it.
+      if (!record.scoreSaveId || outbox.read(record.scoreSaveId)?.type !== "saved_score_receipt") return false;
+    }
+  } catch (readError) {
+    console.warn("Could not safely inspect learning history before storage cleanup", readError);
     return false;
   }
   if (key === HISTORY_KEY && Array.isArray(value)) {
@@ -1943,7 +1983,8 @@ function isQuotaExceededError(error) {
 }
 
 function saveSettings() {
-  writeJson(SETTINGS_KEY, state.settings);
+  // A small preference change must never sacrifice learning history to free space.
+  return writeJson(SETTINGS_KEY, state.settings, { allowRecovery: false });
 }
 
 function saveSession() {
@@ -2406,6 +2447,13 @@ function renderQuiz() {
 
   renderFeedback();
   renderChoices(question);
+  if (!session.showingFeedback) {
+    const questionKey = `${session.id}:${session.inSpartan ? "spartan" : "main"}:${getCurrentQuestionIndex()}:${session.answers.length}`;
+    if (questionKey !== state.lastRenderedQuestionKey) {
+      state.lastRenderedQuestionKey = questionKey;
+      scrollHostToTop();
+    }
+  }
   maybeAutoPlayPromptAudio(session, question);
   queueSessionSave();
 }
@@ -3192,14 +3240,24 @@ function handleProgressResult(result) {
       vocab: categories(result.categories?.vocab), sentence: categories(result.categories?.sentence, true),
     };
   }
+  const previousRankingPublic = state.progress.settings.rankingPublic;
   state.progress.settings = {
     ok: result.settings?.ok === true && typeof result.settings.rankingPublic === "boolean",
     rankingPublic: result.settings?.rankingPublic === true,
     message: String(result.settings?.message || ""),
   };
-  if (state.progress.settings.ok && state.progress.settingsUncertain) {
-    state.progress.settingsUncertain = false;
-    requestRankings({ force: true });
+  const refreshVisibility = !state.progress.settings.ok || state.progress.settingsUncertain
+    || previousRankingPublic !== state.progress.settings.rankingPublic || !state.progress.settings.rankingPublic;
+  state.progress.settingsUncertain = !state.progress.settings.ok;
+  if (refreshVisibility) {
+    // A progress refresh can discover a preference changed in another tab.
+    // Remove obsolete public names before any replacement ranking is requested.
+    bridgeQueue.discardPending((payload) => payload.type === "load_rankings");
+    state.rankings = createEmptyRankingsState();
+    renderCloudRankings();
+    if (state.progress.settings.ok && state.currentView === "history") {
+      requestRankings({ force: true });
+    }
   }
   renderProgress();
 }

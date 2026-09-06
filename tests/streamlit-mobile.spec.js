@@ -31,7 +31,7 @@ async function expectSetupHeightStable(page, scope) {
     heights.push(await iframe.evaluate((element) => element.getBoundingClientRect().height));
     if (sample < 8) await page.waitForTimeout(500);
   }
-  expect(Math.min(...heights)).toBeGreaterThanOrEqual(640);
+  expect(Math.min(...heights)).toBeGreaterThanOrEqual(Math.min(640, page.viewportSize().height));
   expect(Math.max(...heights) - Math.min(...heights), `Setup iframe heights: ${heights.join(", ")}`).toBeLessThanOrEqual(4);
 }
 
@@ -103,7 +103,7 @@ async function expectHistoryHeightStable(page, iframe) {
     heights.push(await iframe.evaluate((element) => element.getBoundingClientRect().height));
     if (sample < 5) await page.waitForTimeout(400);
   }
-  expect(Math.min(...heights)).toBeGreaterThanOrEqual(640);
+  expect(Math.min(...heights)).toBeGreaterThanOrEqual(Math.min(640, page.viewportSize().height));
   expect(Math.max(...heights) - Math.min(...heights), `History iframe heights: ${heights.join(", ")}`).toBeLessThanOrEqual(4);
 }
 
@@ -750,6 +750,113 @@ test.describe("unified Streamlit entry on desktop", () => {
   test("long history remains wheel-scrollable on desktop inside the Cloud shell", async ({ page }) => {
     test.setTimeout(90000);
     await checkLongHistoryScrolling(page, { nested: true });
+  });
+
+  test("interactive views fit a short Cloud window and follow later window resizing", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 500 });
+    await page.goto(localCloudShellUrl(localAppUrl(true)), { waitUntil: "domcontentloaded" });
+    const host = page.frameLocator("#cloudApp");
+    await expectLocalFixture(host);
+    const iframe = host.locator("iframe[title*='esperanto_mobile_pwa']");
+    const app = host.frameLocator("iframe[title*='esperanto_mobile_pwa']");
+    await expect(app.locator("#setupView")).toHaveClass(/is-active/, { timeout: 15000 });
+    await app.locator("#audioMode").selectOption("off");
+
+    const expectFits = async (topControl) => {
+      const viewportHeight = page.viewportSize().height;
+      await expect.poll(async () => {
+        const box = await iframe.boundingBox();
+        return box && Math.abs(box.height - viewportHeight) <= 2 && box.y >= -1
+          && box.y + box.height <= viewportHeight + 1;
+      }).toBe(true);
+      await expect.poll(() => pointerReachableBox(page, app.locator("#historyNav"))).not.toBeNull();
+      await expect.poll(() => pointerReachableBox(page, app.locator(topControl))).not.toBeNull();
+      expect(await host.locator("[data-testid='stMain']").evaluate((element) => element.scrollTop)).toBe(0);
+    };
+    const clickNav = async (selector) => {
+      const box = await pointerReachableBox(page, app.locator(selector));
+      expect(box, `${selector} must work without scrolling the outer page`).not.toBeNull();
+      await page.mouse.click(box.point.x, box.point.y);
+    };
+
+    await app.locator("#historyNav").click();
+    await expect(app.locator("#historyView")).toHaveClass(/is-active/);
+    await expectFits("#historyUserName");
+    await page.setViewportSize({ width: 1440, height: 600 });
+    await expectFits("#historyUserName");
+    await clickNav("#diagnosticsNav");
+    await expect(app.locator("#diagnosticsView")).toHaveClass(/is-active/);
+    await expectFits("#diagnosticsRefreshButton");
+    await clickNav("#quizNav");
+    await expect(app.locator("#quizView")).toHaveClass(/is-active/);
+    await expectFits("#phaseLabel");
+    await page.setViewportSize({ width: 1440, height: 420 });
+    await expectFits("#phaseLabel");
+    await clickNav("#historyNav");
+    await expectFits("#historyUserName");
+  });
+
+  test("a scrolled quiz shows each new question from the top without losing wrong-answer feedback", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.setViewportSize({ width: 1000, height: 500 });
+    await page.route("**/data/sentences.json", async (route) => {
+      const entries = Array.from({ length: 4 }, (_unused, index) => {
+        const ja = `例文${index + 1}。${"長い文章を読み、意味を考えて答えを選びます。".repeat(5)}`;
+        return {
+          id: 9000 + index, topic: "Scroll Review", subtopic: "Long Sentences",
+          level: 2, levelName: "Beginner 2", hasAudio: false, audioKey: "",
+          eo: `Demando ${index + 1}. ${"Ni legas longan frazon kaj elektas la ĝustan respondon. ".repeat(8)}`,
+          ja, translations: { ja },
+        };
+      });
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ entries }) });
+    });
+    const url = new URL(localAppUrl(true));
+    url.searchParams.set("quiz", "sentence");
+    await page.goto(localCloudShellUrl(url.href), { waitUntil: "domcontentloaded" });
+    const host = page.frameLocator("#cloudApp");
+    await expectLocalFixture(host);
+    const iframe = host.locator("iframe[title*='esperanto_mobile_pwa']");
+    const app = host.frameLocator("iframe[title*='esperanto_mobile_pwa']");
+    await expect(app.locator("#setupView")).toHaveClass(/is-active/, { timeout: 15000 });
+    await app.locator("#audioMode").selectOption("off");
+    await app.locator("#spartanMode").uncheck();
+    await app.locator("#startButton").click();
+    await expect(app.locator("#quizView")).toHaveClass(/is-active/);
+    await expect.poll(() => app.locator("#app").evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(200);
+    // Let the initial view's deliberate frame/scroll settling finish before
+    // testing a later question change, which must perform its own reset.
+    await page.waitForTimeout(500);
+    const clickAnswer = async (correct) => {
+      const session = await readSession(app);
+      const question = session.questions[session.qIndex];
+      const index = correct ? question.answerIndex : (question.answerIndex + 1) % question.options.length;
+      const answer = app.locator(`.choice-button[data-index='${index}']`);
+      const box = await wheelToTarget(page, iframe, answer, "Answer in the lower part of a long question");
+      expect(await app.locator("#app").evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      await page.mouse.click(box.point.x, box.point.y);
+    };
+    const expectNewQuestionTop = async (phase) => {
+      await expect(app.locator("#phaseLabel")).toHaveText(phase);
+      await expect.poll(() => app.locator("#app").evaluate((element) => element.scrollTop)).toBe(0);
+      expect(await pointerReachableBox(page, app.locator("#phaseLabel"))).not.toBeNull();
+      const promptTop = await app.locator("#promptText").evaluate((element) => element.getBoundingClientRect().top);
+      const navTop = await app.locator(".bottom-nav").evaluate((element) => element.getBoundingClientRect().top);
+      expect(promptTop).toBeLessThan(navTop);
+    };
+
+    await clickAnswer(true);
+    await expectNewQuestionTop("Q2/4");
+    await clickAnswer(false);
+    await expect(app.locator("#feedbackPanel")).toBeVisible();
+    await expect(app.locator("#phaseLabel")).toHaveText("Q2/4");
+    expect(await app.locator("#app").evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    const next = await wheelToTarget(page, iframe, app.locator("#nextButton"), "Next action after an incorrect answer");
+    await page.mouse.click(next.point.x, next.point.y);
+    await expectNewQuestionTop("Q3/4");
+    await expect(app.locator("#feedbackPanel")).toBeHidden();
+    expect(errors).toEqual([]);
   });
 
   test("an old classic URL opens the unified sentence quiz", async ({ page }) => {

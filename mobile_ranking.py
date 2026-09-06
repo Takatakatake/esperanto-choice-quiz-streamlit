@@ -2,7 +2,7 @@ import datetime
 
 from score_append_utils import load_sheet_records
 from ranking_utils import HOF_THRESHOLD, RANKING_TOP_N, ranking_rows, summarize_rankings_from_stats
-from user_settings import load_ranking_visibility, normalize_user
+from user_settings import load_ranking_visibility, normalize_user, request_user_identity
 
 
 SCORES_SHEET = "Scores"
@@ -61,7 +61,7 @@ def _ranking_result(payload, *, ok, message, rankings=None, own=None, source="un
     return {
         "type": "rankings_result",
         "requestId": str(payload.get("requestId", "")),
-        "user": normalize_user(payload.get("user")),
+        "user": request_user_identity(payload.get("user")),
         "ok": bool(ok),
         "message": message,
         "source": source,

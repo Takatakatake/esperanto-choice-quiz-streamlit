@@ -5,7 +5,7 @@ import datetime
 from ranking_utils import safe_float
 from score_append_utils import load_sheet_records
 from score_row_utils import SENTENCE_MODE, VOCAB_MODE, infer_mode, iter_unique_score_rows
-from user_settings import load_ranking_visibility, normalize_user, request_message, user_settings_result
+from user_settings import load_ranking_visibility, normalize_user, request_message, request_user_identity, user_settings_result
 
 
 _MESSAGES = {
@@ -88,7 +88,7 @@ def load_user_progress_request(payload):
     result = {
         "type": "progress_result",
         "requestId": str(request.get("requestId", "")),
-        "user": user,
+        "user": request_user_identity(request.get("user")),
         "ok": False,
         "message": "",
         "updatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
