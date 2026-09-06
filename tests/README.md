@@ -1,62 +1,88 @@
-# テストスイート
+# テスト
 
-「現状ある程度動いているアプリ」を壊さずに保守するための回帰ガード集。各テストが
-「何を守るか」を一覧化する。**いずれも稼働コードの振る舞いは変えない検査**である。
+リポジトリ直下から実行します。Pythonの集計・保存処理、ブラウザ側の送信待ち管理・旧版移行、実画面の動作を分けて確認します。
 
-## 実行方法
+## PythonとJavaScriptの単体テスト
 
 ```bash
-# Python 単体テスト（CIゲート）— 69 tests。リポジトリ直下から discover で実行する。
-npm run test:unit          # = python3 -m unittest discover -s tests -p 'test_*.py'
+npm run test:unit
+# 同じPythonテストを直接実行する場合
+python3 -m unittest discover -s tests -p 'test_*.py'
 
-# アセット整合（CSV↔JSON↔音声キー↔manifest、WAVヘッダ）
-npm run validate:mobile-assets          # 完全
-npm run validate:mobile-assets:quick    # WAVヘッダ省略
-
-# Playwright E2E（手動・ローカルのみ。CIには含まれない）
-npm run test:mobile            # 静的PWAの再読込復元・結果・履歴
-npm run test:streamlit-mobile  # Streamlit埋め込みモバイルの再読込復元
+npm run test:client
 ```
 
-> 注: `tests/` はパッケージではない（`__init__.py` 無し）。`python3 -m unittest tests.<module>`
-> は `ModuleNotFoundError` になるため、必ず `discover` で実行する。
+`tests/` はPythonパッケージではないため、`python3 -m unittest tests.<module>` ではなく `discover` を使います。
 
-## Python 単体テスト（69）
-
-### スコア計算・グループ化のパリティ／正当性
-| ファイル | 件 | 守る対象 |
-|---|---|---|
-| `test_quiz_logic_parity.py` | 2 | Python(`quiz_scoring.py`+`build_groups`) ↔ JS(`quiz_core.mjs`) がスコアもグループ化も一致（`node` を起動して比較） |
-| `test_quiz_scoring_values.py` | 6 | スコアの**絶対値**（手計算の期待値）。両言語同時の定数ドリフトを検知（パリティでは見逃す） |
-| `test_classify_pos.py` | 5 | 品詞分類器: 数詞/相関詞の誤分類是正が退行しないこと・本物の数詞/相関詞の維持・基本形態規則 |
-
-### 4択ビルダー
-| ファイル | 件 | 守る対象 |
-|---|---|---|
-| `test_vocab_question_options.py` | 3 | 単語: グループ内表示の一意性（カナリア）＋ビルダーが表示重複誤答を排除（予防） |
-| `test_sentence_question_options.py` | 2 | 例文: direction対応の表示重複排除（実データに重複が存在する load-bearing ロジック） |
-| `test_sentence_locale_column.py` | 2 | zh/ko 例文クローンが正しいローカライズ列(中文/한국어)を読む（i18n。`clone_parity` の盲点を補完） |
-
-### ファイル間の整合
-| ファイル | 件 | 守る対象 |
-|---|---|---|
-| `test_clone_parity.py` | 1 | 6エントリーアプリ(ja/zh/ko × 単語/例文)の共有ロジックが構造的に一致（クローン・ドリフト＝最大の保守リスク） |
-| `test_phrase_offset_consistency.py` | 3 | 例文キーの `PhraseID` オフセットが `data_sources.PHRASE_ID_OFFSET` に一元化され、どこにも直書きが無いこと |
-| `test_app_imports.py` | 1 | 6エントリーアプリが import 可能で `main()` を公開（構文/import スモーク） |
-
-### ナビゲーション・状態・スコアバックエンド
-| ファイル | 件 | 守る対象 |
-|---|---|---|
-| `test_classic_navigation.py` | 4 | URLクエリパラメータ → クイズモード解決 |
-| `test_classic_session_persistence.py` | 6 | PCクラシック版の localStorage スナップショット 生成/検証/復元 |
-| `test_infer_mode.py` | 6 | vocab/sentence モード推論の優先順位契約（明示>sentenceヒント>vocabヒント>fallback、競合時sentence勝ち） |
-| `test_score_sync_service.py` | 3 | 共有スコア同期サービスの累積振り分け（overall / sentence） |
-| `test_compute_score_totals.py` | 7 | スコア集計中核 `compute_user_score_totals` の契約: overall==vocab+sentence／`infer_mode`振り分け／`save_id`重複排除／userフィルタ／points頑健化（保存経路で唯一の無テスト関数だった） |
-| `test_score_row_alignment.py` | 11 | 列整列レイヤ: `_row_from_headers`(レコード→実ヘッダ順の行)＋`_read_records_from_values`(生シート→records、短行パディング・全空行ドロップ・内部空ヘッダ列は左シフトせず安全) |
-| `test_mobile_score_ranking.py` | 7 | モバイルのスコア保存(`save_id`冪等・recoverable)＋ランキング集計(JST・max-merge) |
-
-## Playwright E2E（手動・ローカル）
-| ファイル | 守る対象 |
+| 対象 | 主なテスト |
 |---|---|
-| `mobile-pwa.spec.js` | 静的PWA: 再読込復元・結果/履歴・保存データ復旧 |
-| `streamlit-mobile.spec.js` | Streamlit埋め込みモバイル: 再読込復元・結果/履歴 |
+| 得点・4択・品詞 | `test_quiz_scoring_values.py`, `test_quiz_logic_parity.py`, `test_classify_pos.py`, `test_vocab_question_options.py`, `quiz-questions.test.mjs` |
+| 例文と多言語データ | `test_sentence_question_options.py`, `test_sentence_locale_column.py`, `test_phrase_offset_consistency.py` |
+| 共通の6入口・URL・応答処理 | `test_app_imports.py`, `test_quiz_navigation.py`, `test_entry_routing.py`, `test_unified_bridge.py` |
+| 保存・集計・列整列 | `test_score_sync_service.py`, `test_compute_score_totals.py`, `test_score_row_alignment.py`, `test_infer_mode.py` |
+| 個人進捗・公開設定・ランキング | `test_user_progress.py`, `test_user_settings.py`, `test_mobile_score_ranking.py` |
+| outbox・複数タブ・応答順序・名前切替 | `learning-sync.test.mjs` |
+| 旧PC版からの明示的な引継ぎ | `legacy-session-migration.test.mjs`, `test_classic_session_persistence.py` |
+| メモリ内シートを使う実バックエンド | `test_learning_fixture.py` |
+
+公開設定のテストでは、非公開ユーザーが全ランキングと自身の追加行から除外されること、設定取得失敗時に一覧を出さないこと、設定の読取失敗で既存行を上書きしないことを確認します。進捗は全履歴・旧形式・重複除去を確認し、名前変更前の応答を混ぜないようにします。
+
+outboxは保存IDごとの保持、確認応答後のreceiptによる再登録抑止、旧v1配列の全件移行、端末保存失敗時の完了結果保護を確認します。
+
+旧版移行のテストは、検出のみでは書き換えず明示選択を必要とすること、原文保持、既存モバイル保存の優先、保存状態が不明な旧完了結果の閲覧専用扱いを確認します。
+
+## データと音声の整合性
+
+```bash
+npm run validate:mobile-assets
+# WAVヘッダ確認を省く高速チェック
+npm run validate:mobile-assets:quick
+```
+
+CSV・生成JSON・音声キー・同梱音声・Driveフォールバックmanifestの対応を確認します。
+
+## ブラウザ検証の準備
+
+```bash
+npm ci
+npx playwright install chromium
+```
+
+静的PWAの検証は、別ターミナルでHTTPサーバーを起動して実行します。
+
+```bash
+python3 -m http.server 8765
+```
+
+```bash
+npm run test:mobile
+```
+
+`mobile-pwa.spec.js` は再読み込み復元、結果・履歴、保存データ復旧などを確認します。
+
+## 学習記録を保存するローカルfixture
+
+```bash
+streamlit run tests/fixtures/learning_app.py --server.address 127.0.0.1 --server.port 8502
+```
+
+このfixtureは実際の `unified_app.py`・Streamlit橋渡し・進捗集計・公開設定保存・得点保存を使い、シート接続だけをメモリ内の仮実装に置き換えます。実シート・認証情報・Drive音声manifestは使用しません。fixtureを本番へデプロイしないでください。
+
+| 名前 | 初期公開設定 | 全体 | 単語 | 例文 |
+|---|---|---:|---:|---:|
+| `Review-A` | 公開 | 200 | 150 | 50 |
+| `Review-B` | 非公開 | 1,200,000 | 1,000,000 | 200,000 |
+
+`Review-A` の内訳は名詞120点、旧形式の動詞30点、例文の `travel` / `train` が50点です。`Review-B` は名前を入力すれば進捗を閲覧できますが、ランキングには出ません。仮シートは同じサーバープロセスのタブと再読み込みの間で共有され、サーバーを再起動すると初期化されます。
+
+`?lang=ja` / `?lang=zh` / `?lang=ko` と `?quiz=sentence` を指定できます。`?preview_width=390` は実際のクイズiframeの表示幅を指定するfixture専用オプションです（320〜1600px）。外側のブラウザウィンドウをリサイズできない場合も、スマートフォン幅の折り返しや操作配置を目視確認できます。
+
+別ターミナルから、通常表示の確認先と得点保存の確認先を同じfixtureに向けて実行します。
+
+```bash
+STREAMLIT_APP_URL=http://127.0.0.1:8502/ STUDY_APP_URL=http://127.0.0.1:8502/ npm run test:streamlit-mobile
+```
+
+`STREAMLIT_APP_URL` は通常の共通画面確認先（既定8501番）、`STUDY_APP_URL` は仮シートへの保存・進捗確認先（既定8502番）です。ブラウザ回帰テストはlocalhostのサーバーだけを許可し、得点を追加する前にfixture専用の非表示マーカーを確認します。
+
+`streamlit-mobile.spec.js` はPCからの初期表示、旧 `classic=1` URL、名前付きクイズの完了時自動保存、outboxの消込、個人進捗、非公開設定の保持、全ランキングからの除外、多言語、音声を確認します。ブラウザの通信切断を使う手動確認でも、このfixtureで未送信結果を作り、再接続後の送信と重複がないことを確認します。
