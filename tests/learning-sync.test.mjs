@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addToOutbox, restoreOutbox, matchesAccountResult, filterUserHistory, SerializedBridge, DurableScoreOutbox, canReplaceSession, persistPresentSession, isAccountCacheFresh } from "../mobile_app/learning_sync.mjs";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import { addToOutbox, restoreOutbox, matchesAccountResult, filterUserHistory, SerializedBridge, DurableScoreOutbox, canReplaceSession, persistPresentSession, isAccountCacheFresh, matchesScoreRecord, scoreRecordFromSession, hasConfirmedScoreEvidence } from "../mobile_app/learning_sync.mjs";
+import { computeResultSummary } from "../mobile_app/quiz_core.mjs";
 
 function score(id, user = "A") {
   return { type: "save_score", requestId: `request-${id}`, saveId: `save-${id}`, sessionId: id, user, points: 12.5, total: 4 };
@@ -138,7 +141,7 @@ class SharedStorage {
   key(index) { return [...this.values.keys()][index] ?? null; }
   getItem(key) { return this.values.get(key) ?? null; }
   setItem(key, value) {
-    if (this.failWrite(key)) throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+    if (this.failWrite(key, value)) throw new DOMException("Storage quota exceeded", "QuotaExceededError");
     this.values.set(key, String(value));
   }
   removeItem(key) { this.values.delete(key); }
@@ -340,3 +343,208 @@ test("account caches require exact language, name, successful state, and a valid
   assert.equal(isAccountCacheFresh(cached, { ...request, now: 999 }), false);
   assert.equal(isAccountCacheFresh({ ...cached, status: "error" }, request), false);
 });
+
+const historyKey = "esperanto-choice-mobile:history:v2";
+
+function completedSession(id = "ack", user = "A") {
+  return {
+    id, status: "complete", settings: { userName: user, mode: "vocab", direction: "eo_to_ja" },
+    questions: Array.from({ length: 4 }, () => ({
+      options: Array.from({ length: 4 }, (_, index) => ({ eo: `eo-${index}`, ja: `ja-${index}` })), answerIndex: 0,
+    })),
+    correct: 1, mainPoints: 10, spartanRawPoints: 0, spartanScaledPoints: 0,
+    spartanAttempts: 0, spartanCorrect: 0, finalPoints: 15,
+    scoreSaveId: `save-${id}`, scoreSyncRequestId: `request-${id}`, scoreSyncStatus: "pending",
+  };
+}
+
+function seededScoreStorage() {
+  const storage = new SharedStorage();
+  const session = completedSession();
+  const record = { ...scoreRecordFromSession(session), scoreSyncStatus: "pending" };
+  storage.setItem(sessionKey, JSON.stringify(session));
+  storage.setItem(historyKey, JSON.stringify([record]));
+  outboxFor(storage).put(restoreOutbox([{ payload: { ...score("ack"), points: 15 } }])[0]);
+  return storage;
+}
+
+// Run the application's actual persistence and restore handlers, with only browser I/O replaced.
+// This catches ordering bugs that pure outbox tests cannot observe (e.g. a pending retry overwriting saved history).
+const scoreAppSource = readFileSync(new URL("../mobile_app/app.js", import.meta.url), "utf8");
+const scoreAppFunctions = [
+  "scoreOutboxStorage", "readConfirmedScoreEvidence", "recoverConfirmedScore", "loadPendingScoresFromStorage",
+  "persistOutboxEntry", "enqueueCompletedScore", "restorePendingScores", "updateScoreRecord", "refreshScoreViews",
+  "pumpScoreOutbox", "retryPendingScores", "handleScoreSyncResult", "handleBridgeTimeout", "saveSession", "saveHistory",
+  "buildScoreSyncPayload", "writeJson", "recoverLocalStorageWrite", "isQuotaExceededError", "isPlainObject", "isCompleteSession",
+].map((name) => {
+  const start = scoreAppSource.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `Application handler ${name} must exist`);
+  const end = scoreAppSource.indexOf("\nfunction ", start + 1);
+  return scoreAppSource.slice(start, end === -1 ? undefined : end);
+}).join("\n");
+
+function restoredScoreApp(storage) {
+  const state = {
+    session: JSON.parse(storage.getItem(sessionKey)), history: JSON.parse(storage.getItem(historyKey)) || [],
+    outbox: [], currentView: "setup", rankings: {}, progress: {}, mobileConfig: { targetLang: "ja", source: "test" },
+  };
+  const bridge = fakeBridge();
+  let requestId = 0;
+  const app = vm.createContext({
+    state, window: { localStorage: storage, clearTimeout: () => {}, setTimeout: () => 0 },
+    bridgeQueue: bridge.queue, DurableScoreOutbox, addToOutbox, persistPresentSession,
+    matchesScoreRecord, scoreRecordFromSession, hasConfirmedScoreEvidence, computeResultSummary,
+    isLegacyScoreSaveBlocked: () => false, currentUserName: () => state.session?.settings.userName || "",
+    createId: () => `app-request-${++requestId}`, t: (key) => key,
+    console: { warn: () => {} }, showToast: () => {}, updateSaveStatus: () => {},
+    renderResult: () => {}, renderHistory: () => {}, requestProgress: () => {}, requestRankings: () => {},
+    APP_VERSION: "test", IS_STREAMLIT_COMPONENT: true,
+    SESSION_KEY: sessionKey, HISTORY_KEY: historyKey, OUTBOX_KEY: legacyKey, OUTBOX_ENTRY_PREFIX: prefix,
+    HISTORY_MAX_ITEMS: 100, HISTORY_RECOVERY_LIMITS: [50, 20, 5, 0],
+    SCORE_SYNC_AUTO_RETRY_MAX: 3, SCORE_SYNC_RETRY_DELAY_MS: 10000,
+  });
+  vm.runInContext(scoreAppFunctions, app);
+  return { app, state, sent: bridge.sent };
+}
+
+function confirmScore(storage) {
+  const instance = restoredScoreApp(storage);
+  instance.app.restorePendingScores();
+  assert.equal(instance.sent.length, 1);
+  const payload = instance.sent[0];
+  instance.app.handleScoreSyncResult({
+    type: "score_save_result", ok: true, requestId: payload.requestId, saveId: payload.saveId,
+  });
+  assert.equal(instance.state.session.scoreSyncStatus, "saved");
+  assert.equal(instance.state.outbox.length, 0);
+  return instance;
+}
+
+test("saved evidence requires matching durable identity, owner, points, and question count", () => {
+  const session = { ...completedSession(), scoreSyncStatus: "saved" };
+  const payload = { ...score("ack"), points: 15 };
+  const history = [{ ...scoreRecordFromSession(session), scoreSyncStatus: "saved" }];
+  assert.equal(hasConfirmedScoreEvidence(payload, { session }), true);
+  assert.equal(hasConfirmedScoreEvidence(payload, { history }), true);
+  for (const altered of [
+    { ...payload, user: "B" }, { ...payload, user: "a" }, { ...payload, saveId: "other" },
+    { ...payload, sessionId: "other" }, { ...payload, points: 16 }, { ...payload, total: 3 },
+  ]) assert.equal(hasConfirmedScoreEvidence(altered, { session, history }), false);
+  assert.equal(hasConfirmedScoreEvidence(payload, { session: { ...session, scoreSyncStatus: "pending" } }), false);
+  assert.equal(hasConfirmedScoreEvidence(payload, { session: { ...session, status: "active" } }), false);
+  assert.equal(hasConfirmedScoreEvidence(payload, { history: [{ ...history[0], scoreSyncStatus: "unknown" }] }), false);
+});
+
+for (const durableCopy of ["session", "history", "both"]) {
+  test(`failed ACK receipt preserves saved result after reload offline using ${durableCopy}`, () => {
+    const storage = seededScoreStorage();
+    storage.failWrite = (key, raw) => {
+      const value = JSON.parse(raw);
+      return value?.type === "saved_score_receipt"
+        || (durableCopy === "history" && key === sessionKey && value.scoreSyncStatus === "saved")
+        || (durableCopy === "session" && key === historyKey && value.some((row) => row.scoreSyncStatus === "saved"));
+    };
+    confirmScore(storage);
+    assert.equal(outboxFor(storage).list().entries.length, 1, "Failed receipt leaves original pending entry intact");
+    const reloaded = restoredScoreApp(storage);
+    reloaded.app.restorePendingScores();
+    assert.equal(reloaded.state.session.scoreSyncStatus, "saved");
+    assert.equal(reloaded.state.history[0].scoreSyncStatus, "saved");
+    assert.equal(reloaded.state.outbox.length, 0);
+    assert.equal(reloaded.sent.length, 0, "No bridge save is attempted while offline with durable saved evidence");
+    const evidence = reloaded.app.readConfirmedScoreEvidence();
+    assert.equal(hasConfirmedScoreEvidence({ ...score("ack"), points: 15 }, evidence), true);
+    storage.failWrite = () => false;
+    reloaded.app.retryPendingScores();
+    assert.deepEqual(outboxFor(storage).read("save-ack"), { type: "saved_score_receipt", saveId: "save-ack" });
+    assert.equal(outboxFor(storage).list().entries.length, 0);
+    assert.equal(reloaded.sent.length, 0);
+  });
+}
+
+test("an acknowledgement existing only in memory never falsely confirms the durable pending result", () => {
+  const storage = seededScoreStorage();
+  storage.failWrite = (key, raw) => {
+    const value = JSON.parse(raw);
+    return value?.type === "saved_score_receipt"
+      || (key === sessionKey && value.scoreSyncStatus === "saved")
+      || (key === historyKey && value.some((row) => row.scoreSyncStatus === "saved"));
+  };
+  confirmScore(storage);
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).scoreSyncStatus, "pending");
+  assert.equal(JSON.parse(storage.getItem(historyKey))[0].scoreSyncStatus, "pending");
+  const reloaded = restoredScoreApp(storage);
+  reloaded.app.restorePendingScores();
+  assert.equal(reloaded.state.session.scoreSyncStatus, "pending");
+  assert.equal(reloaded.state.outbox.length, 1);
+  assert.equal(reloaded.sent.length, 1);
+  assert.equal(reloaded.sent[0].saveId, "save-ack", "An uncertain result retries only its original deduplicated ID");
+});
+
+test("history-only confirmation repairs the ACK after the active session is gone", () => {
+  const storage = seededScoreStorage();
+  storage.failWrite = (_key, raw) => JSON.parse(raw)?.type === "saved_score_receipt";
+  confirmScore(storage);
+  storage.removeItem(sessionKey);
+  const reloaded = restoredScoreApp(storage);
+  reloaded.app.restorePendingScores();
+  assert.equal(reloaded.state.session, null);
+  assert.equal(reloaded.state.outbox.length, 0);
+  assert.equal(reloaded.state.history[0].scoreSyncStatus, "saved");
+  assert.equal(reloaded.sent.length, 0);
+  assert.equal(storage.getItem(sessionKey), null);
+});
+
+test("a saved session restores matching pending history even when an ACK receipt already exists", () => {
+  const storage = seededScoreStorage();
+  storage.failWrite = (key, raw) => key === historyKey && JSON.parse(raw).some((row) => row.scoreSyncStatus === "saved");
+  confirmScore(storage);
+  assert.equal(outboxFor(storage).list().entries.length, 0);
+  assert.equal(JSON.parse(storage.getItem(historyKey))[0].scoreSyncStatus, "pending");
+  storage.failWrite = () => false;
+  const reloaded = restoredScoreApp(storage);
+  reloaded.app.restorePendingScores();
+  assert.equal(reloaded.state.history[0].scoreSyncStatus, "saved");
+  assert.equal(JSON.parse(storage.getItem(historyKey))[0].scoreSyncStatus, "saved");
+  assert.equal(reloaded.sent.length, 0);
+});
+
+test("a different user's saved result with the same IDs cannot acknowledge or be overwritten by a pending score", () => {
+  const storage = seededScoreStorage();
+  const otherSession = { ...completedSession("ack", "B"), scoreSyncStatus: "saved" };
+  storage.setItem(sessionKey, JSON.stringify(otherSession));
+  storage.setItem(historyKey, JSON.stringify([{ ...scoreRecordFromSession(otherSession), scoreSyncStatus: "saved" }]));
+  const reloaded = restoredScoreApp(storage);
+  reloaded.app.restorePendingScores();
+  assert.equal(reloaded.sent.length, 1);
+  assert.equal(reloaded.sent[0].user, "A");
+  assert.equal(reloaded.state.outbox.length, 1);
+  assert.equal(reloaded.state.session.settings.userName, "B");
+  assert.equal(reloaded.state.session.scoreSyncStatus, "saved");
+  assert.equal(reloaded.state.history[0].userName, "B");
+  assert.equal(reloaded.state.history[0].scoreSyncStatus, "saved");
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).scoreSyncStatus, "saved");
+  assert.equal(outboxFor(storage).read("save-ack").payload.user, "A");
+});
+
+for (const response of ["failure", "timeout"]) {
+  test(`a stale tab's late ${response} cannot downgrade another tab's durable saved confirmation`, () => {
+    const storage = seededScoreStorage();
+    const stale = restoredScoreApp(storage);
+    stale.app.restorePendingScores();
+    const pendingPayload = stale.sent[0];
+    storage.failWrite = (_key, raw) => JSON.parse(raw)?.type === "saved_score_receipt";
+    confirmScore(storage);
+    if (response === "failure") {
+      stale.app.handleScoreSyncResult({
+        type: "score_save_result", ok: false, requestId: pendingPayload.requestId, saveId: pendingPayload.saveId,
+      });
+    } else stale.app.handleBridgeTimeout(pendingPayload);
+    assert.equal(stale.state.session.scoreSyncStatus, "saved");
+    assert.equal(stale.state.history[0].scoreSyncStatus, "saved");
+    assert.equal(stale.state.outbox.length, 0);
+    assert.equal(stale.sent.length, 1);
+    assert.equal(JSON.parse(storage.getItem(sessionKey)).scoreSyncStatus, "saved");
+    assert.equal(JSON.parse(storage.getItem(historyKey))[0].scoreSyncStatus, "saved");
+  });
+}

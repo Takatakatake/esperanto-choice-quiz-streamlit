@@ -7,9 +7,9 @@ import {
 
 import { buildLocalizedQuestion } from "./quiz_questions.mjs";
 import { inspectLegacySession, commitLegacySessionImport, hasClassicMigrationProvenance, isLegacyScoreSaveBlocked } from "./legacy_session_migration.mjs";
-import { addToOutbox, matchesAccountResult, filterUserHistory, SerializedBridge, DurableScoreOutbox, canReplaceSession, persistPresentSession, isAccountCacheFresh } from "./learning_sync.mjs";
+import { addToOutbox, matchesAccountResult, filterUserHistory, SerializedBridge, DurableScoreOutbox, canReplaceSession, persistPresentSession, isAccountCacheFresh, matchesScoreRecord, scoreRecordFromSession, hasConfirmedScoreEvidence } from "./learning_sync.mjs";
 
-const APP_VERSION = "2026-09-06-unified-learning-1";
+const APP_VERSION = "2026-09-06-unified-learning-2";
 const STORAGE_PREFIX = "esperanto-choice-mobile";
 const SESSION_KEY = `${STORAGE_PREFIX}:session:v2`;
 const SETTINGS_KEY = `${STORAGE_PREFIX}:settings:v2`;
@@ -1581,17 +1581,18 @@ function handleScoreSyncResult(result) {
   entry.status = result.ok ? "saved" : "error";
   entry.message = String(result.message || t(result.ok ? "scoreSavedMessage" : "scoreSaveFailedMessage"));
   entry.payload.retryMode = result.ok ? "" : String(result.recoverable || "");
-  updateScoreRecord(entry);
   if (result.ok) {
+    updateScoreRecord(entry);
     try {
       scoreOutboxStorage().acknowledge(entry.payload.saveId);
     } catch (error) {
-      // The server already confirmed the score. A future retry is safe with the same save ID.
+      // Durable saved session/history can repair this receipt on the next refresh.
       console.warn("Could not store the score acknowledgement", error);
     }
     state.outbox = state.outbox.filter((item) => item !== entry);
   } else {
     persistOutboxEntry(entry);
+    updateScoreRecord(entry);
   }
   if (result.ok && entry.payload.user === currentUserName()) {
     state.rankings.loadedAt = 0;
@@ -1945,7 +1946,8 @@ function saveSettings() {
 function saveSession() {
   return persistPresentSession(state.session, (session) => {
     session.updatedAt = new Date().toISOString();
-    const saved = writeJson(SESSION_KEY, session);
+    // A failed confirmation write must not delete the history's only durable acknowledgement.
+    const saved = writeJson(SESSION_KEY, session, { allowRecovery: session.scoreSyncStatus !== "saved" });
     if (saved) updateSaveStatus(t("autoSaved"));
     return saved;
   });
@@ -1990,9 +1992,9 @@ function queueSessionSave() {
   }, 80);
 }
 
-function saveHistory() {
+function saveHistory({ allowRecovery = true } = {}) {
   state.history = state.history.slice(0, HISTORY_MAX_ITEMS);
-  writeJson(HISTORY_KEY, state.history);
+  writeJson(HISTORY_KEY, state.history, { allowRecovery });
 }
 
 function requestRankings({ force = false } = {}) {
@@ -2686,6 +2688,41 @@ function scoreOutboxStorage() {
   });
 }
 
+function readConfirmedScoreEvidence() {
+  const read = (key) => {
+    try {
+      const raw = window.localStorage.getItem(key);
+      return raw === null ? null : JSON.parse(raw);
+    } catch (error) {
+      console.warn("Could not read a saved score confirmation", error);
+      return null;
+    }
+  };
+  return { session: read(SESSION_KEY), history: read(HISTORY_KEY) };
+}
+
+function recoverConfirmedScore(entry, storage, evidence) {
+  if (!hasConfirmedScoreEvidence(entry.payload, evidence)) return false;
+  const stored = storage.read(entry.payload.saveId);
+  if (stored?.payload && !matchesScoreRecord(entry.payload, {
+    id: stored.payload.sessionId, userName: stored.payload.user, scoreSaveId: stored.payload.saveId,
+    points: stored.payload.points, total: stored.payload.total,
+  })) return false;
+  try {
+    storage.acknowledge(entry.payload.saveId);
+  } catch (error) {
+    // Keep the saved records and original queue intact if receipt repair is still unavailable.
+    console.warn("Could not repair the saved score receipt", error);
+  }
+  entry.status = "saved";
+  entry.message = t("scoreSavedMessage");
+  entry.payload.retryMode = "";
+  updateScoreRecord(entry);
+  state.outbox = state.outbox.filter((item) => item.payload.saveId !== entry.payload.saveId);
+  bridgeQueue.discardPending((payload) => payload.type === "save_score" && payload.saveId === entry.payload.saveId);
+  return true;
+}
+
 function loadPendingScoresFromStorage() {
   const previous = state.outbox;
   let readFailed = false;
@@ -2700,9 +2737,19 @@ function loadPendingScoresFromStorage() {
     const { entries, errors } = storage.list();
     readFailed ||= errors.length > 0;
     errors.forEach(({ key, error }) => console.warn(`Could not read pending score ${key}`, error));
-    const byId = new Map(entries.map((entry) => [entry.payload.saveId, entry]));
+    const evidence = readConfirmedScoreEvidence();
+    const byId = new Map();
+    const confirmedIds = new Set();
+    for (const entry of entries) {
+      if (recoverConfirmedScore(entry, storage, evidence)) confirmedIds.add(entry.payload.saveId);
+      else byId.set(entry.payload.saveId, entry);
+    }
     for (const entry of previous) {
       try {
+        if (confirmedIds.has(entry.payload.saveId) || recoverConfirmedScore(entry, storage, evidence)) {
+          byId.delete(entry.payload.saveId);
+          continue;
+        }
         const stored = storage.read(entry.payload.saveId);
         if (stored?.type === "saved_score_receipt") {
           entry.status = "saved";
@@ -2730,7 +2777,9 @@ function loadPendingScoresFromStorage() {
 
 function persistOutboxEntry(entry) {
   try {
-    const stored = scoreOutboxStorage().put(entry);
+    const storage = scoreOutboxStorage();
+    if (recoverConfirmedScore(entry, storage, readConfirmedScoreEvidence())) return true;
+    const stored = storage.put(entry);
     if (stored.saved) {
       entry.status = "saved";
       entry.message = t("scoreSavedMessage");
@@ -2765,11 +2814,12 @@ function enqueueCompletedScore(session) {
 }
 
 function restorePendingScores() {
-  if (isCompleteSession(state.session) && state.session.scoreSyncStatus === "saved") {
-    const record = state.history.find((item) => item.id === state.session.id);
-    if (record) {
-      record.scoreSyncStatus = "saved";
-      saveHistory();
+  // Reconcile durable confirmations before adopting the active result or retrying any score.
+  loadPendingScoresFromStorage();
+  if (isCompleteSession(state.session)) {
+    const payload = buildScoreSyncPayload(state.session, computeResultSummary(state.session));
+    if (hasConfirmedScoreEvidence(payload, readConfirmedScoreEvidence())) {
+      updateScoreRecord({ payload, status: "saved", message: t("scoreSavedMessage") });
     }
   }
   enqueueCompletedScore(state.session);
@@ -2778,7 +2828,9 @@ function restorePendingScores() {
 
 function updateScoreRecord(entry) {
   const { payload, status, message } = entry;
-  if (state.session?.id === payload.sessionId) {
+  const sessionRecord = scoreRecordFromSession(state.session);
+  if (!sessionRecord.scoreSaveId && sessionRecord.id) sessionRecord.scoreSaveId = `mobile-${sessionRecord.id}`;
+  if (state.session?.status === "complete" && matchesScoreRecord(payload, sessionRecord)) {
     Object.assign(state.session, {
       scoreSaveId: payload.saveId, scoreSyncRequestId: payload.requestId,
       scoreSyncStatus: status, scoreSyncMessage: message,
@@ -2786,11 +2838,13 @@ function updateScoreRecord(entry) {
     });
     saveSession();
   }
-  const record = state.history.find((item) => item.id === payload.sessionId);
+  const record = state.history.find((item) => matchesScoreRecord(payload, {
+    ...item, scoreSaveId: item.scoreSaveId || `mobile-${item.id}`,
+  }));
   if (record) {
     record.scoreSaveId = payload.saveId;
     record.scoreSyncStatus = status;
-    saveHistory();
+    saveHistory({ allowRecovery: status !== "saved" });
   }
 }
 

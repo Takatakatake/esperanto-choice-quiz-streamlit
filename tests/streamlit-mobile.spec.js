@@ -234,7 +234,7 @@ test("unified result auto-saves to the local fixture and history stays readable"
   const savedSession = await readSession(mobileApp);
   expect(savedSession.scoreSyncStatus).toBe("saved");
   expect(savedSession.scoreSaveId).not.toBe("");
-  await expect.poll(() => mobileApp.locator("body").evaluate((saveId) => {
+  await expect.poll(() => mobileApp.locator("body").evaluate((_body, saveId) => {
     const key = `esperanto-choice-mobile:outbox:v2:${encodeURIComponent(saveId)}`;
     const pendingKeys = Object.keys(localStorage).filter((entryKey) => entryKey.startsWith("esperanto-choice-mobile:outbox:v2:")
       && JSON.parse(localStorage.getItem(entryKey))?.payload);
@@ -288,6 +288,21 @@ test("unified result auto-saves to the local fixture and history stays readable"
   await expect(mobileApp.locator("#rankingPublic")).not.toBeChecked();
   await expect(mobileApp.locator("#progressContent .progress-totals strong").first()).toHaveText(`${savedSession.finalPoints.toFixed(1)}点`);
 
+  // A saved quiz keeps its own account when retried after viewing another name.
+  await mobileApp.locator("#historyUserName").fill("Review-A");
+  await mobileApp.locator("#historyUserButton").click();
+  await expect(mobileApp.locator("#progressContent .progress-totals strong").first()).toHaveText("200.0点", { timeout: 15000 });
+  await expect(mobileApp.locator("#rankingPublic")).toBeChecked();
+  await mobileApp.locator("#quizNav").click();
+  await mobileApp.locator("#retryButton").click();
+  await expect(mobileApp.locator("#quizView")).toHaveClass(/is-active/);
+  expect((await readSession(mobileApp)).settings.userName).toBe(userName);
+  await mobileApp.locator("#historyNav").click();
+  await expect(mobileApp.locator("#historyUserName")).toHaveValue(userName);
+  await expect(mobileApp.locator("#rankingPublic")).toBeEnabled({ timeout: 15000 });
+  await expect(mobileApp.locator("#rankingPublic")).not.toBeChecked();
+  await expect(mobileApp.locator("#progressContent .progress-totals strong").first()).toHaveText(`${savedSession.finalPoints.toFixed(1)}点`);
+
   await mobileApp.locator("#diagnosticsNav").click();
   await expect(mobileApp.locator("#diagnosticsView")).toHaveClass(/is-active/);
   await expect(mobileApp.locator("#diagnosticsList")).toContainText("Streamlit Cloud組み込み");
@@ -304,6 +319,56 @@ test("unified result auto-saves to the local fixture and history stays readable"
   expect([200, 206]).toContain(diagnosticAudioResponse.status());
   await expect(mobileApp.locator("#audioDiagSentenceStatus")).toContainText("再生できました");
   expect(errors).toEqual([]);
+});
+
+test("saved results survive receipt storage failure and reload without another score request", async ({ page }, testInfo) => {
+  test.setTimeout(60000);
+  await page.addInitScript(() => {
+    const originalSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key.startsWith("esperanto-choice-mobile:outbox:v2:")
+          && JSON.parse(value)?.type === "saved_score_receipt") {
+        throw new DOMException("Fixture receipt write failure", "QuotaExceededError");
+      }
+      return originalSetItem.call(this, key, value);
+    };
+    if (window === window.top) {
+      window.fixtureScoreRequests = [];
+      window.addEventListener("message", (event) => {
+        if (event.data?.type === "streamlit:setComponentValue" && event.data?.value?.type === "save_score") {
+          window.fixtureScoreRequests.push(event.data.value.saveId);
+        }
+      });
+    }
+  });
+  await page.goto(localAppUrl(true), { waitUntil: "domcontentloaded" });
+  await expectLocalFixture(page);
+  const app = page.frameLocator("iframe[title*='esperanto_mobile_pwa']");
+  await expect(app.locator("#startButton")).toBeEnabled({ timeout: 15000 });
+  await app.locator("#userName").fill(`receipt-failure-${Date.now()}-${testInfo.workerIndex}`);
+  await app.locator("#spartanMode").uncheck();
+  await app.locator("#audioMode").selectOption("off");
+  await app.locator("#startButton").click();
+  await answerRemainingCorrectly(page, app);
+  await expect(app.locator("#syncScoreButton")).toHaveText("学習記録を保存済み", { timeout: 15000 });
+  const savedSession = await readSession(app);
+  expect(savedSession.scoreSyncStatus).toBe("saved");
+  expect(await page.evaluate(() => window.fixtureScoreRequests)).toEqual([savedSession.scoreSaveId]);
+  // The fault leaves the pending disk entry intact, so the next load must use
+  // the durably saved session/history as proof of the server acknowledgement.
+  const storedEntry = await app.locator("body").evaluate((_body, saveId) => (
+    JSON.parse(localStorage.getItem(`esperanto-choice-mobile:outbox:v2:${encodeURIComponent(saveId)}`))
+  ), savedSession.scoreSaveId);
+  expect(storedEntry.payload.saveId).toBe(savedSession.scoreSaveId);
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expectLocalFixture(page);
+  await expect(app.locator("#resultView")).toHaveClass(/is-active/, { timeout: 15000 });
+  await expect(app.locator("#syncScoreButton")).toHaveText("学習記録を保存済み");
+  await app.locator("#historyNav").click();
+  await expect(app.locator("#progressContent .progress-totals strong").first()).toHaveText(`${savedSession.finalPoints.toFixed(1)}点`, { timeout: 15000 });
+  await expect(app.locator("#historyList .history-sync-status").first()).toContainText("保存済み");
+  expect(await page.evaluate(() => window.fixtureScoreRequests)).toEqual([]);
 });
 
 test("fixture accounts show their own field totals while private accounts stay out of rankings", async ({ page }) => {

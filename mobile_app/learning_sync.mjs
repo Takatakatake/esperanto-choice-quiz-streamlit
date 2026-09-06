@@ -44,6 +44,30 @@ export function filterUserHistory(history, user) {
   return history.filter((record) => String(record.userName || "").trim() === user);
 }
 
+export function matchesScoreRecord(payload, record) {
+  return Boolean(payload && record && typeof payload.user === "string" && payload.user.trim()
+    && typeof record.userName === "string" && record.userName.trim() === payload.user.trim()
+    && typeof payload.saveId === "string" && payload.saveId && record.scoreSaveId === payload.saveId
+    && typeof payload.sessionId === "string" && payload.sessionId && record.id === payload.sessionId
+    && Number.isFinite(payload.points) && record.points === payload.points
+    && Number.isFinite(payload.total) && payload.total > 0 && record.total === payload.total);
+}
+
+export function scoreRecordFromSession(session) {
+  return {
+    id: session?.id, userName: session?.settings?.userName, scoreSaveId: session?.scoreSaveId,
+    points: session?.finalPoints, total: Array.isArray(session?.questions) ? session.questions.length : undefined,
+  };
+}
+
+export function hasConfirmedScoreEvidence(payload, { session, history } = {}) {
+  // Callers must supply records read from durable storage, never an in-memory acknowledgement.
+  if (session?.status === "complete" && session.scoreSyncStatus === "saved"
+      && matchesScoreRecord(payload, scoreRecordFromSession(session))) return true;
+  return Array.isArray(history) && history.some((record) => record?.scoreSyncStatus === "saved"
+    && matchesScoreRecord(payload, record));
+}
+
 const RESPONSE_TYPES = {
   save_score: "score_save_result",
   load_rankings: "rankings_result",
