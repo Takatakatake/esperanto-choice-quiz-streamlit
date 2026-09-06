@@ -345,6 +345,7 @@ test("account caches require exact language, name, successful state, and a valid
 });
 
 const historyKey = "esperanto-choice-mobile:history:v2";
+const settingsKey = "esperanto-choice-mobile:settings:v2";
 
 function completedSession(id = "ack", user = "A") {
   return {
@@ -374,7 +375,7 @@ const scoreAppSource = readFileSync(new URL("../mobile_app/app.js", import.meta.
 const scoreAppFunctions = [
   "scoreOutboxStorage", "readConfirmedScoreEvidence", "recoverConfirmedScore", "loadPendingScoresFromStorage",
   "persistOutboxEntry", "enqueueCompletedScore", "restorePendingScores", "updateScoreRecord", "refreshScoreViews",
-  "pumpScoreOutbox", "retryPendingScores", "handleScoreSyncResult", "handleBridgeTimeout", "saveSession", "saveHistory",
+  "pumpScoreOutbox", "retryPendingScores", "handleScoreSyncResult", "handleBridgeTimeout", "saveSession", "saveHistory", "saveSettings",
   "buildScoreSyncPayload", "writeJson", "recoverLocalStorageWrite", "isQuotaExceededError", "isPlainObject", "isCompleteSession",
 ].map((name) => {
   const start = scoreAppSource.indexOf(`function ${name}(`);
@@ -386,9 +387,11 @@ const scoreAppFunctions = [
 function restoredScoreApp(storage) {
   const state = {
     session: JSON.parse(storage.getItem(sessionKey)), history: JSON.parse(storage.getItem(historyKey)) || [],
+    settings: JSON.parse(storage.getItem(settingsKey)) || {},
     outbox: [], currentView: "setup", rankings: {}, progress: {}, mobileConfig: { targetLang: "ja", source: "test" },
   };
   const bridge = fakeBridge();
+  const saveStatuses = [];
   let requestId = 0;
   const app = vm.createContext({
     state, window: { localStorage: storage, clearTimeout: () => {}, setTimeout: () => 0 },
@@ -396,15 +399,15 @@ function restoredScoreApp(storage) {
     matchesScoreRecord, scoreRecordFromSession, hasConfirmedScoreEvidence, computeResultSummary,
     isLegacyScoreSaveBlocked: () => false, currentUserName: () => state.session?.settings.userName || "",
     createId: () => `app-request-${++requestId}`, t: (key) => key,
-    console: { warn: () => {} }, showToast: () => {}, updateSaveStatus: () => {},
+    console: { warn: () => {} }, showToast: () => {}, updateSaveStatus: (message) => saveStatuses.push(message),
     renderResult: () => {}, renderHistory: () => {}, requestProgress: () => {}, requestRankings: () => {},
     APP_VERSION: "test", IS_STREAMLIT_COMPONENT: true,
-    SESSION_KEY: sessionKey, HISTORY_KEY: historyKey, OUTBOX_KEY: legacyKey, OUTBOX_ENTRY_PREFIX: prefix,
+    SESSION_KEY: sessionKey, HISTORY_KEY: historyKey, SETTINGS_KEY: settingsKey, OUTBOX_KEY: legacyKey, OUTBOX_ENTRY_PREFIX: prefix,
     HISTORY_MAX_ITEMS: 100, HISTORY_RECOVERY_LIMITS: [50, 20, 5, 0],
     SCORE_SYNC_AUTO_RETRY_MAX: 3, SCORE_SYNC_RETRY_DELAY_MS: 10000,
   });
   vm.runInContext(scoreAppFunctions, app);
-  return { app, state, sent: bridge.sent };
+  return { app, state, sent: bridge.sent, saveStatuses };
 }
 
 function confirmScore(storage) {
@@ -548,3 +551,89 @@ for (const response of ["failure", "timeout"]) {
     assert.equal(JSON.parse(storage.getItem(historyKey))[0].scoreSyncStatus, "saved");
   });
 }
+
+test("a failed settings save keeps history-only ACK evidence and the previous durable name", () => {
+  const storage = seededScoreStorage();
+  storage.setItem(settingsKey, JSON.stringify({ userName: "A" }));
+  let settingsFull = false;
+  storage.failWrite = (key, raw) => {
+    const value = JSON.parse(raw);
+    return value?.type === "saved_score_receipt"
+      || (key === sessionKey && value.scoreSyncStatus === "saved")
+      || (key === settingsKey && settingsFull);
+  };
+  const instance = confirmScore(storage);
+  const durableBefore = new Map(storage.values);
+  settingsFull = true;
+  instance.state.settings.userName = "B";
+  assert.equal(instance.app.saveSettings(), false);
+  assert.equal(instance.state.settings.userName, "B", "Keep the current UI selection while reporting persistence failure");
+  assert.equal(instance.saveStatuses.at(-1), "saveFailed");
+  assert.deepEqual(storage.values, durableBefore, "A preference write must not alter session/history/outbox or the previous stored settings");
+  const reloaded = restoredScoreApp(storage);
+  reloaded.app.restorePendingScores();
+  assert.equal(reloaded.state.settings.userName, "A");
+  assert.equal(reloaded.state.session.scoreSyncStatus, "saved");
+  assert.equal(reloaded.sent.length, 0, "A name change must not resurrect the confirmed score");
+});
+
+test("active-session quota recovery cannot delete another result's history-only acknowledgement", () => {
+  const storage = seededScoreStorage();
+  storage.failWrite = (key, raw) => JSON.parse(raw)?.type === "saved_score_receipt"
+    || (key === sessionKey && JSON.parse(raw).scoreSyncStatus === "saved");
+  const instance = confirmScore(storage);
+  const durableBefore = new Map(storage.values);
+  storage.failWrite = (key) => key === sessionKey;
+  instance.state.session = { ...completedSession("next", "B"), status: "active", scoreSyncStatus: "idle" };
+  assert.equal(instance.app.saveSession(), false);
+  assert.deepEqual(storage.values, durableBefore);
+  assert.equal(instance.saveStatuses.at(-1), "saveFailed");
+});
+
+function longAcknowledgedHistory() {
+  const record = { ...scoreRecordFromSession(completedSession()), scoreSyncStatus: "saved" };
+  return [
+    ...Array.from({ length: 99 }, (_, index) => ({ id: `local-${index}`, userName: "B", scoreSyncStatus: "local" })),
+    record,
+  ];
+}
+
+test("history quota trimming preserves an older saved acknowledgement without a separate receipt", () => {
+  const storage = seededScoreStorage();
+  storage.setItem(historyKey, JSON.stringify(longAcknowledgedHistory()));
+  const original = storage.getItem(historyKey);
+  storage.failWrite = (key, raw) => key === historyKey && JSON.parse(raw).length > 20;
+  const instance = restoredScoreApp(storage);
+  instance.app.saveHistory();
+  assert.equal(storage.getItem(historyKey), original);
+  assert.equal(instance.state.history.length, 100);
+  assert.equal(instance.saveStatuses.at(-1), "saveFailed");
+});
+
+test("history quota recovery can still trim when an independent receipt protects the saved result", () => {
+  const storage = seededScoreStorage();
+  storage.setItem(historyKey, JSON.stringify(longAcknowledgedHistory()));
+  outboxFor(storage).acknowledge("save-ack");
+  storage.failWrite = (key, raw) => key === historyKey && JSON.parse(raw).length > 20;
+  const instance = restoredScoreApp(storage);
+  instance.app.saveHistory();
+  assert.equal(JSON.parse(storage.getItem(historyKey)).length, 20);
+  assert.equal(instance.state.history.length, 20);
+  assert.equal(outboxFor(storage).read("save-ack").type, "saved_score_receipt");
+  const reloaded = restoredScoreApp(storage);
+  reloaded.app.restorePendingScores();
+  assert.equal(reloaded.state.session.scoreSyncStatus, "saved");
+  assert.equal(reloaded.sent.length, 0);
+});
+
+test("unreadable receipts cannot authorize deleting saved history during quota recovery", () => {
+  const storage = seededScoreStorage();
+  storage.setItem(historyKey, JSON.stringify(longAcknowledgedHistory()));
+  storage.setItem(`${prefix}save-ack`, "unreadable receipt");
+  const before = new Map(storage.values);
+  storage.failWrite = (key, raw) => key === historyKey && JSON.parse(raw).length > 20;
+  const instance = restoredScoreApp(storage);
+  instance.app.saveHistory();
+  assert.deepEqual(storage.values, before);
+  assert.equal(instance.saveStatuses.at(-1), "saveFailed");
+});

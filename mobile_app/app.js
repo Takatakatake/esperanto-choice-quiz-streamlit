@@ -1899,7 +1899,22 @@ function writeJson(key, value, { allowRecovery = true } = {}) {
 }
 
 function recoverLocalStorageWrite(key, value, error) {
-  if (!isQuotaExceededError(error)) {
+  if (!isQuotaExceededError(error) || ![SESSION_KEY, HISTORY_KEY].includes(key)) {
+    return false;
+  }
+  try {
+    const rawHistory = window.localStorage.getItem(HISTORY_KEY);
+    const history = rawHistory === null ? [] : JSON.parse(rawHistory);
+    if (!Array.isArray(history)) return false;
+    const outbox = scoreOutboxStorage();
+    for (const record of history) {
+      if (record?.scoreSyncStatus !== "saved") continue;
+      // Without a separate receipt this row may be the only durable proof of
+      // a successful server save. Neither trimming nor deletion may remove it.
+      if (!record.scoreSaveId || outbox.read(record.scoreSaveId)?.type !== "saved_score_receipt") return false;
+    }
+  } catch (readError) {
+    console.warn("Could not safely inspect learning history before storage cleanup", readError);
     return false;
   }
   if (key === HISTORY_KEY && Array.isArray(value)) {
@@ -1943,7 +1958,8 @@ function isQuotaExceededError(error) {
 }
 
 function saveSettings() {
-  writeJson(SETTINGS_KEY, state.settings);
+  // A small preference change must never sacrifice learning history to free space.
+  return writeJson(SETTINGS_KEY, state.settings, { allowRecovery: false });
 }
 
 function saveSession() {
