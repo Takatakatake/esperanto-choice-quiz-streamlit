@@ -1,5 +1,24 @@
 const { test, expect } = require("@playwright/test");
 
+function localAppUrl() {
+  const url = new URL(process.env.MOBILE_APP_URL || "http://127.0.0.1:8765/mobile_app/");
+  if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) {
+    throw new Error("MOBILE_APP_URL must point to a local test server.");
+  }
+  return url.toString();
+}
+
+async function expectUnifiedNavigation(scope, mode) {
+  await expect(scope.locator("#classicAppLink, #mobileAppLink")).toHaveCount(0);
+  await expect(scope.locator("input[type='password']")).toHaveCount(0);
+  for (const [lang, hostname] of [["ja", "esperanto-quiz"], ["zh", "esperanto-quiz-zh"], ["ko", "esperanto-quiz-ko"]]) {
+    const link = scope.locator(`#${lang}AppLink`);
+    await expect(link).toHaveAttribute("href", `https://${hostname}.streamlit.app/?quiz=${mode}`);
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", /noopener/);
+  }
+}
+
 test.use({
   viewport: { width: 393, height: 851 },
   isMobile: true,
@@ -33,7 +52,7 @@ function expectSessionChoicesToBeUnique(session) {
 }
 
 async function startDuplicateProneSentenceSession(page, direction) {
-  const appUrl = process.env.MOBILE_APP_URL || "http://127.0.0.1:8765/mobile_app/";
+  const appUrl = localAppUrl();
   await page.goto(appUrl, { waitUntil: "networkidle" });
   await expect(page.locator("#setupView")).toHaveClass(/is-active/);
 
@@ -62,7 +81,7 @@ test("mobile quiz state survives reload", async ({ page }) => {
   });
   page.on("pageerror", (error) => errors.push(error.message));
 
-  const appUrl = process.env.MOBILE_APP_URL || "http://127.0.0.1:8765/mobile_app/";
+  const appUrl = localAppUrl();
   await page.goto(appUrl, { waitUntil: "networkidle" });
   await expect(page.locator("#setupView")).toHaveClass(/is-active/);
   await expect(page.locator("#audioMode")).toBeEnabled();
@@ -71,13 +90,11 @@ test("mobile quiz state survives reload", async ({ page }) => {
 
   await page.locator("#modeSentence").click();
   await expect(page.locator("#modeSentence")).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator("#classicAppLink")).toHaveAttribute("href", /classic=1&quiz=sentence/);
+  await expectUnifiedNavigation(page, "sentence");
   await page.locator("#modeVocab").click();
   await expect(page.locator("#modeVocab")).toHaveAttribute("aria-selected", "true");
   await expect(page.locator("#jaAppLink")).toHaveClass(/is-active/);
-  await expect(page.locator("#zhAppLink")).toHaveAttribute("href", /esperanto-quiz-zh\.streamlit\.app\/\?mobile_app=1&quiz=vocab/);
-  await expect(page.locator("#classicAppLink")).toHaveAttribute("target", "_blank");
-  await expect(page.locator("#classicAppLink")).toHaveAttribute("href", /classic=1&quiz=vocab/);
+  await expectUnifiedNavigation(page, "vocab");
 
   const setupMetrics = await page.evaluate(() => {
     const start = document.querySelector("#startButton");
@@ -208,7 +225,7 @@ for (const direction of ["eo_to_ja", "ja_to_eo"]) {
 }
 
 test("mobile app can quiz with Chinese and Korean target translations", async ({ page, browser }) => {
-  const appUrl = process.env.MOBILE_APP_URL || "http://127.0.0.1:8765/mobile_app/";
+  const appUrl = localAppUrl();
 
   const zhUrl = new URL(appUrl);
   zhUrl.searchParams.set("lang", "zh");
@@ -216,13 +233,13 @@ test("mobile app can quiz with Chinese and Korean target translations", async ({
   await page.goto(zhUrl.toString(), { waitUntil: "networkidle" });
   await expect(page.locator("#modeVocab")).toHaveText("单词");
   await expect(page.locator("#languageLinksLabel")).toHaveText("语言");
-  await expect(page.locator("#classicAppLink")).toHaveText("电脑版");
+  await expectUnifiedNavigation(page, "vocab");
   await expect(page.locator("#directionSelect option[value='eo_to_ja']")).toHaveText("世界语 → 中文");
-  await expect(page.locator("#historyNav")).toHaveText("成绩");
+  await expect(page.locator("#historyNav")).toHaveText("学习记录");
   await expect(page.locator("#diagnosticsNav")).toHaveText("诊断");
   await page.locator("#historyNav").click();
   await expect(page.locator("#clearHistoryButton")).toHaveText("仅清除本机记录");
-  await expect(page.locator("#rankingStatus")).toContainText("Streamlit Cloud 版");
+  await expect(page.locator("#rankingStatus")).toHaveText("在线版可查看排行榜。");
   await page.locator("#homeNav").click();
   await page.locator("#startButton").scrollIntoViewIfNeeded();
   await page.locator("#startButton").click();
@@ -248,9 +265,9 @@ test("mobile app can quiz with Chinese and Korean target translations", async ({
   await koPage.goto(koUrl.toString(), { waitUntil: "networkidle" });
   await expect(koPage.locator("#modeSentence")).toHaveText("예문");
   await expect(koPage.locator("#languageLinksLabel")).toHaveText("언어");
-  await expect(koPage.locator("#classicAppLink")).toHaveText("PC판");
+  await expectUnifiedNavigation(koPage, "sentence");
   await expect(koPage.locator("#directionSelect option[value='eo_to_ja']")).toHaveText("에스페란토 → 한국어");
-  await expect(koPage.locator("#historyNav")).toHaveText("성적");
+  await expect(koPage.locator("#historyNav")).toHaveText("학습 기록");
   await expect(koPage.locator("#diagnosticsNav")).toHaveText("진단");
   await koPage.locator("#diagnosticsNav").click();
   await expect(koPage.locator("#diagnosticsList")).toContainText("퀴즈 데이터");
@@ -278,7 +295,7 @@ test("mobile result and history stay readable", async ({ page }) => {
   });
   page.on("pageerror", (error) => errors.push(error.message));
 
-  const appUrl = process.env.MOBILE_APP_URL || "http://127.0.0.1:8765/mobile_app/";
+  const appUrl = localAppUrl();
   await page.goto(appUrl, { waitUntil: "networkidle" });
   await page.evaluate(() => {
     const original = Storage.prototype.setItem;
@@ -300,7 +317,7 @@ test("mobile result and history stay readable", async ({ page }) => {
   await expect(page.locator("#resultView")).toHaveClass(/is-active/);
   await expect(page.locator("#accuracyMetric")).toHaveText("100%");
   await expect(page.locator("#syncScoreButton")).toBeDisabled();
-  await expect(page.locator("#syncScoreStatus")).toContainText("Streamlit Cloud版");
+  await expect(page.locator("#syncScoreStatus")).toHaveText("アカウントへの記録保存はオンライン版で利用できます。");
   await expect(page.locator("#reviewList .review-item").first()).toBeVisible();
 
   const resultMetrics = await page.evaluate(() => {
@@ -321,7 +338,9 @@ test("mobile result and history stay readable", async ({ page }) => {
   await page.locator("#historyNav").click();
   await expect(page.locator("#historyView")).toHaveClass(/is-active/);
   await expect(page.locator("#clearHistoryButton")).toHaveText("端末履歴のみ消去");
-  await expect(page.locator("#rankingStatus")).toContainText("Streamlit Cloud版");
+  await expect(page.locator("#rankingStatus")).toHaveText("ランキングはオンライン版で利用できます。");
+  await expect(page.locator("#historyUserName")).toBeVisible();
+  await expect(page.locator("#rankingPublic")).toBeDisabled();
   await expect(page.locator("#historyList .history-item").first()).toContainText("単語");
 
   await page.locator("#diagnosticsNav").click();
@@ -351,7 +370,7 @@ test("mobile review can replay the Esperanto correct answer", async ({ page }) =
   });
   page.on("pageerror", (error) => errors.push(error.message));
 
-  const appUrl = process.env.MOBILE_APP_URL || "http://127.0.0.1:8765/mobile_app/";
+  const appUrl = localAppUrl();
   await page.goto(appUrl, { waitUntil: "networkidle" });
   await page.locator("#spartanMode").uncheck();
   await page.locator("#startButton").scrollIntoViewIfNeeded();
@@ -383,7 +402,7 @@ test("mobile review can replay the Esperanto correct answer", async ({ page }) =
 });
 
 test("mobile setup recovers from malformed localStorage", async ({ page }) => {
-  const appUrl = process.env.MOBILE_APP_URL || "http://127.0.0.1:8765/mobile_app/";
+  const appUrl = localAppUrl();
   await page.goto(appUrl, { waitUntil: "networkidle" });
   await page.evaluate(() => {
     localStorage.setItem("esperanto-choice-mobile:session:v2", JSON.stringify({ status: "active", questions: "broken" }));
@@ -392,4 +411,41 @@ test("mobile setup recovers from malformed localStorage", async ({ page }) => {
   await page.reload({ waitUntil: "networkidle" });
   await expect(page.locator("#setupView")).toHaveClass(/is-active/);
   await expect(page.locator("#startButton")).toBeEnabled();
+});
+
+
+test.describe("unified app on desktop", () => {
+  test.use({
+    viewport: { width: 1440, height: 1000 }, isMobile: false, hasTouch: false, deviceScaleFactor: 1,
+    userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  });
+
+  test("uses the same setup, quiz and reload flow without a PC switch", async ({ page }) => {
+    await page.goto(localAppUrl(), { waitUntil: "networkidle" });
+    await expect(page.locator("#setupView")).toHaveClass(/is-active/);
+    await expectUnifiedNavigation(page, "vocab");
+    await page.locator("#audioMode").selectOption("off");
+    await page.locator("#startButton").click();
+    await expect(page.locator("#quizView")).toHaveClass(/is-active/);
+    await expect(page.locator(".choice-button")).toHaveCount(4);
+    const before = await page.evaluate(() => JSON.parse(localStorage.getItem("esperanto-choice-mobile:session:v2")));
+    await page.locator(`.choice-button[data-index="${before.questions[0].answerIndex}"]`).click();
+    const answered = await page.evaluate(() => JSON.parse(localStorage.getItem("esperanto-choice-mobile:session:v2")));
+    expect(answered.correct).toBe(1);
+    expect(answered.qIndex).toBe(1);
+    const geometry = await page.evaluate(() => {
+      const choices = document.querySelector("#choiceGrid").getBoundingClientRect();
+      const nav = document.querySelector(".bottom-nav").getBoundingClientRect();
+      return { left: choices.left, right: choices.right, bottom: choices.bottom, navTop: nav.top, width: innerWidth, scrollWidth: document.documentElement.scrollWidth };
+    });
+    expect(geometry.left).toBeGreaterThanOrEqual(0);
+    expect(geometry.right).toBeLessThanOrEqual(geometry.width);
+    expect(geometry.bottom).toBeLessThanOrEqual(geometry.navTop + 1);
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
+    await page.reload({ waitUntil: "networkidle" });
+    await expect(page.locator("#quizView")).toHaveClass(/is-active/);
+    const restored = await page.evaluate(() => JSON.parse(localStorage.getItem("esperanto-choice-mobile:session:v2")));
+    expect(restored.id).toBe(answered.id);
+    expect(restored.answers).toEqual(answered.answers);
+  });
 });

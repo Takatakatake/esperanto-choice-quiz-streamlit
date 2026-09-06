@@ -1,0 +1,243 @@
+{
+  "vocabFeedback": {
+    "version": 1,
+    "appKind": "vocab",
+    "targetLang": "ja",
+    "savedAt": "2026-09-06T12:00:00Z",
+    "state": {
+      "questions": [
+        {
+          "group_id": "noun:beginner_1:g1",
+          "pos": "noun",
+          "stages": [
+            "beginner_1"
+          ],
+          "prompt": "akvo",
+          "answer_index": 0,
+          "options": [
+            {
+              "esperanto": "akvo",
+              "japanese": "水",
+              "audio_key": "akvo",
+              "unified_level": 1
+            },
+            {
+              "esperanto": "fajro",
+              "japanese": "火",
+              "audio_key": "fajro",
+              "unified_level": 1
+            },
+            {
+              "esperanto": "tero",
+              "japanese": "地面",
+              "audio_key": "tero",
+              "unified_level": 1
+            },
+            {
+              "esperanto": "aero",
+              "japanese": "空気",
+              "audio_key": "aero",
+              "unified_level": 1
+            }
+          ]
+        },
+        {
+          "group_id": "noun:beginner_1:g1",
+          "pos": "noun",
+          "stages": [
+            "beginner_1"
+          ],
+          "prompt": "fajro",
+          "answer_index": 1,
+          "options": [
+            {
+              "esperanto": "akvo",
+              "japanese": "水",
+              "audio_key": "akvo",
+              "unified_level": 1
+            },
+            {
+              "esperanto": "fajro",
+              "japanese": "火",
+              "audio_key": "fajro",
+              "unified_level": 1
+            },
+            {
+              "esperanto": "tero",
+              "japanese": "地面",
+              "audio_key": "tero",
+              "unified_level": 1
+            },
+            {
+              "esperanto": "aero",
+              "japanese": "空気",
+              "audio_key": "aero",
+              "unified_level": 1
+            }
+          ]
+        }
+      ],
+      "q_index": 1,
+      "correct": 1,
+      "streak": 0,
+      "answers": [
+        {
+          "q_idx": 0,
+          "selected": 0,
+          "correct": 0,
+          "phase": "main"
+        },
+        {
+          "q_idx": 1,
+          "selected": 3,
+          "correct": 1,
+          "phase": "main"
+        }
+      ],
+      "showing_result": true,
+      "last_result_msg": "不正解。正解: 火",
+      "last_is_correct": false,
+      "spartan_mode": true,
+      "spartan_pending": [
+        1
+      ],
+      "in_spartan_round": false,
+      "spartan_current_q_idx": null,
+      "spartan_attempts": 0,
+      "spartan_correct_count": 0,
+      "show_option_audio": true,
+      "score_saved": false,
+      "pending_save_id": null,
+      "user_name": "Learner",
+      "seed": 7,
+      "group_id": "noun:beginner_1:g1",
+      "pos_select": "noun",
+      "main_points": 10.0,
+      "spartan_points": 0.0,
+      "quiz_direction": "eo_to_ja",
+      "last_correct_answer": ""
+    }
+  },
+  "sentenceReview": {
+    "version": 1,
+    "appKind": "sentence",
+    "targetLang": "ko",
+    "savedAt": "2026-09-06T12:00:00Z",
+    "state": {
+      "questions": [
+        {
+          "prompt_eo": "Mi lernas.",
+          "prompt_ja": "私は学びます。",
+          "answer_index": 0,
+          "options": [
+            {
+              "phrase": "Mi lernas.",
+              "japanese": "私は学びます。",
+              "level": 1,
+              "phrase_id": 156
+            },
+            {
+              "phrase": "Li kantas.",
+              "japanese": "彼は歌います。",
+              "level": 1,
+              "phrase_id": 157
+            },
+            {
+              "phrase": "Ni iras.",
+              "japanese": "私たちは行きます。",
+              "level": 1,
+              "phrase_id": 158
+            },
+            {
+              "phrase": "Vi legas.",
+              "japanese": "あなたは読みます。",
+              "level": 1,
+              "phrase_id": 159
+            }
+          ]
+        },
+        {
+          "prompt_eo": "Li kantas.",
+          "prompt_ja": "彼は歌います。",
+          "answer_index": 1,
+          "options": [
+            {
+              "phrase": "Mi lernas.",
+              "japanese": "私は学びます。",
+              "level": 1,
+              "phrase_id": 156
+            },
+            {
+              "phrase": "Li kantas.",
+              "japanese": "彼は歌います。",
+              "level": 1,
+              "phrase_id": 157
+            },
+            {
+              "phrase": "Ni iras.",
+              "japanese": "私たちは行きます。",
+              "level": 1,
+              "phrase_id": 158
+            },
+            {
+              "phrase": "Vi legas.",
+              "japanese": "あなたは読みます。",
+              "level": 1,
+              "phrase_id": 159
+            }
+          ]
+        }
+      ],
+      "q_index": 2,
+      "correct": 0,
+      "streak": 0,
+      "answers": [
+        {
+          "q_idx": 0,
+          "selected": 1,
+          "correct": 0
+        },
+        {
+          "q_idx": 1,
+          "selected": 0,
+          "correct": 1
+        },
+        {
+          "q_idx": 1,
+          "selected": 1,
+          "correct": 1
+        },
+        {
+          "q_idx": 0,
+          "selected": 2,
+          "correct": 0
+        }
+      ],
+      "showing_result": true,
+      "last_result_msg": "오답입니다.",
+      "last_is_correct": false,
+      "spartan_mode": true,
+      "spartan_pending": [
+        0
+      ],
+      "in_spartan_round": true,
+      "spartan_current_q_idx": 0,
+      "spartan_attempts": 2,
+      "spartan_correct_count": 1,
+      "show_option_audio": true,
+      "score_saved": false,
+      "pending_save_id": null,
+      "sentence_user_name": "Learner",
+      "direction": "ja_to_eo",
+      "points_raw": 11.666666666666666,
+      "points_main": 0.0,
+      "points_spartan_raw": 16.666666666666664,
+      "points_spartan_scaled": 11.666666666666666,
+      "quiz_topic": "Basics",
+      "quiz_subtopic": "Daily",
+      "quiz_levels": [
+        1
+      ]
+    }
+  }
+}

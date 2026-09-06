@@ -37,5 +37,8 @@ jobs:
       - name: Run Python unit tests
         run: npm run test:unit
 
+      - name: Run browser logic unit tests
+        run: npm run test:client
+
       - name: Validate mobile assets quickly
         run: npm run validate:mobile-assets:quick
