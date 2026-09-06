@@ -363,12 +363,16 @@ test("Streamlit mobile entry uses the localStorage app and survives reload", asy
 
   await page.reload({ waitUntil: "domcontentloaded" });
   const restoredMobileApp = page.frameLocator("iframe[title*='esperanto_mobile_pwa']");
-  await expect(restoredMobileApp.locator("#quizView, #resultView").first()).toBeVisible();
-  const activeView = await restoredMobileApp.locator(".state-view.is-active").first().getAttribute("id");
-  expect(["quizView", "resultView"]).toContain(activeView);
+  // Initial iframe HTML can appear visible before its CSS and app initialize.
+  // Wait for the restored active view, not the uninitialized section's geometry.
+  await expect(restoredMobileApp.locator(".state-view.is-active")).toHaveAttribute("id", "quizView", { timeout: 15000 });
+  await expect(restoredMobileApp.locator("#feedbackPanel")).toBeVisible();
 
   const storedAfterReload = await readSession(restoredMobileApp);
-  expect(storedAfterReload.status).toMatch(/active|complete/);
+  expect(storedAfterReload.status).toBe("active");
+  expect(storedAfterReload.id).toBe(storedBeforeReload.id);
+  expect(storedAfterReload.answers).toEqual(storedBeforeReload.answers);
+  expect(storedAfterReload.spartanPending).toEqual(storedBeforeReload.spartanPending);
 
   let dialogSeen = false;
   page.once("dialog", async (dialog) => {
