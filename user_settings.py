@@ -52,10 +52,16 @@ def normalize_user(value):
     """Keep established, case-sensitive names; only trim surrounding whitespace."""
     if not isinstance(value, str):
         return ""
-    user = value.strip()
-    if any(ord(char) < 32 or ord(char) == 127 for char in user):
+    # Reject controls before stripping: Python strips U+0085, unlike browser
+    # String.trim(), which could otherwise redirect a name to another account.
+    if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
         return ""
-    return user
+    return value.strip()
+
+
+def request_user_identity(value):
+    """Echo the request identity so clients can accept validation errors too."""
+    return value if isinstance(value, str) else ""
 
 
 class SettingsUnavailable(ValueError):
@@ -190,7 +196,7 @@ def save_user_settings_request(payload):
     result = {
         "type": "user_settings_result",
         "requestId": str(request.get("requestId", "")),
-        "user": user,
+        "user": request_user_identity(request.get("user")),
         "ok": False,
         "rankingPublic": False,
         "message": "",

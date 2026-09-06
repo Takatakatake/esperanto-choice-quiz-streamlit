@@ -3192,14 +3192,24 @@ function handleProgressResult(result) {
       vocab: categories(result.categories?.vocab), sentence: categories(result.categories?.sentence, true),
     };
   }
+  const previousRankingPublic = state.progress.settings.rankingPublic;
   state.progress.settings = {
     ok: result.settings?.ok === true && typeof result.settings.rankingPublic === "boolean",
     rankingPublic: result.settings?.rankingPublic === true,
     message: String(result.settings?.message || ""),
   };
-  if (state.progress.settings.ok && state.progress.settingsUncertain) {
-    state.progress.settingsUncertain = false;
-    requestRankings({ force: true });
+  const refreshVisibility = !state.progress.settings.ok || state.progress.settingsUncertain
+    || previousRankingPublic !== state.progress.settings.rankingPublic || !state.progress.settings.rankingPublic;
+  state.progress.settingsUncertain = !state.progress.settings.ok;
+  if (refreshVisibility) {
+    // A progress refresh can discover a preference changed in another tab.
+    // Remove obsolete public names before any replacement ranking is requested.
+    bridgeQueue.discardPending((payload) => payload.type === "load_rankings");
+    state.rankings = createEmptyRankingsState();
+    renderCloudRankings();
+    if (state.progress.settings.ok && state.currentView === "history") {
+      requestRankings({ force: true });
+    }
   }
   renderProgress();
 }

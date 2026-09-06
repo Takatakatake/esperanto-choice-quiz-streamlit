@@ -196,7 +196,7 @@ class UserSettingsTests(unittest.TestCase):
             save.assert_not_called()
             result = user_settings.save_user_settings_request({"type": "save_user_settings", "requestId": "setting-1", "user": " Alice-Ĉ ", "rankingPublic": False})
             self.assertTrue(result["ok"])
-            self.assertEqual(result["user"], "Alice-Ĉ")
+            self.assertEqual(result["user"], " Alice-Ĉ ")
             self.assertEqual(result["requestId"], "setting-1")
             save.assert_called_once_with("Alice-Ĉ", False)
 
