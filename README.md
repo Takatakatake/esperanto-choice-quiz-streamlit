@@ -50,6 +50,8 @@ streamlit run app.py
 
 ## 音声と静的PWA
 
+音声の新規生成・再生成には **RHVoice / Esperanto（eo）/ spomenka** を使います。`RHVoice-test -p spomenka -R 24000` で生成し、同じ本文からの再生成一致と、元データ用・モバイル用WAVの一致を確認します。エスペラント本文を変えた場合は、対応する音声キー・JSON・Drive対応表も更新します。
+
 音声は `mobile_app/audio/` と `mobile_app/sentence-audio/` から同一オリジンで配信し、Google Drive manifestをフォールバックに使います。通常、追加の音声Secretsは不要です。問題文の自動再生はユーザーの操作後に限り、エスペラントの問題文・選択肢・復習の正解を再生します。診断画面で単語・例文の音声を試せます。
 
 静的PWAだけを起動する場合:

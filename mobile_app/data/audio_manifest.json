@@ -1,6 +1,6 @@
 {
   "downloadBaseUrl": "https://drive.google.com/uc?export=download&id=",
-  "generatedAt": "2026-06-11T09:37:13.391221+00:00",
+  "generatedAt": "2026-09-06T13:40:06.450874+00:00",
   "provider": "google_drive",
   "schema": 1,
   "sentence": {
@@ -2590,7 +2590,7 @@
     "2584_bonvolu_gladigi_cxi_tion": "1t6hI8q-Go-TGXzHTUGQa2sdNgXSK7_cz",
     "2585_cxu_vi_povus_purigi_por_mi_cxi_tiun_kostumon": "1VprMxL33Hp2TNVM08rFr36A1LrykkTkf",
     "2586_kiam_miaj_vestoj_estos_pretaj": "17xVNb4ia9ekj1CclVbXRQV2NEEHwIzlZ",
-    "2587_mi_bezonas_gxin_gxis_la_kvina": "1qG9CzmPG_N0vXTlHKxTBxNa20OIHmHEe",
+    "2587_mi_bezonas_gxin_preta_gxis_la_kvina": "11OK6KCHifROvYxCP2A6nDz-DYjQ2Ib3s",
     "2588_mi_revenos_cxirkaux_la_deka_horo": "1sTOWPFYMc7ALaEoH26YXHVPAHqibxS6h",
     "2589_kie_estas_la_savelirejo": "1EJP9zT_cSQT5GEs3r6f1NlxVTlMbugxO",
     "2590_cxu_mi_povas_iel_helpi_vin": "1KpLEzb5A4gG3miAd54MSEGQC7XdD5DWa",
@@ -4463,7 +4463,7 @@
     "4457_miaj_genuoj_doloras": "1aFMgwrM23YnQ17leAX-nQ7UJYlMnLuCt",
     "4458_miaj_limfonodoj_estas_sxvelintaj": "1ZXNahy-JRWr3GRZ0bAMYu2oXV2egO-Lc",
     "4459_mi_havas_gravan_mikozon_de_la_piedoj": "1WJ6L37cmCqXaI56xcFJP9RUu0ZbBlcXW",
-    "4460_mi_pensas_ke_mi_strecxis_muskolon_en_mia_kruro": "1UAUXTxnxIdW31BBu587tcM5MP0qXaJGt",
+    "4460_mi_pensas_ke_mi_trostrecxis_muskolon_en_mia_kruro": "1Cax91UWj9MrxTOQNDbc9ZR2ixHepX4ma",
     "4461_mi_pensas_ke_mi_mangxis_ion_malbonan": "1zeFInetWbyob9oiWqg1k_AGtHlQD7rtx",
     "4462_mi_sentas_min_deprimita": "1TXHheO-GzmWRtPH5hMQkMD_avjAj8Qo3",
     "4463_mi_havas_malfacilajxojn_pri_dormado": "1jI0fjz6KErwy4j1ZqYM85sQlfRsby3hn",
@@ -5007,8 +5007,11 @@
   },
   "sources": {
     "sentence": {
-      "driveFileCount": 5000,
-      "extraDriveKeys": [],
+      "driveFileCount": 5002,
+      "extraDriveKeys": [
+        "2587_mi_bezonas_gxin_gxis_la_kvina",
+        "4460_mi_pensas_ke_mi_strecxis_muskolon_en_mia_kruro"
+      ],
       "fileCount": 5000,
       "folderId": "1tmb4_k3zRv2JjOmHCNvv5zIbbneeKwYZ",
       "label": "Esperanto例文5000文_収録音声",
