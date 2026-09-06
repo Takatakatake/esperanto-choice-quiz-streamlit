@@ -13,12 +13,8 @@ load-bearing 関数があり、いずれも直接テストが無かった:
 本テストは現行の正しい振る舞いを特性化(characterization)して回帰ガードにする。
 **稼働コードは変更しない**（純粋追加）。
 
-なお重要なコントラスト:
-  読み側 `_read_records_from_values` は **内部の空ヘッダ列があっても位置整列を保つ**
-  （空ヘッダ列を出力 dict から落とすだけで、右隣の列を左詰めしない＝堅牢）。
-  一方、書き側 `_write_header_row` は内部空白を詰めるため、手動編集で内部空セルが
-  でき且つ必須列が欠けるとヘッダが左シフトしうる（既知の潜在バグ。Sheets 書込経路に
-  触れるため修正は意図的に見送り中）。本テストは「読み側は安全」を明示的に固定する。
+読み側 `_read_records_from_values` は内部の空ヘッダ列があっても位置整列を保つ。
+書き側のヘッダ拡張でも列位置を保つ契約は `test_learning_fixture.py` で実保存経路を検証する。
 """
 import unittest
 from unittest.mock import Mock, patch
@@ -91,8 +87,7 @@ class ReadRecordsFromValuesTests(unittest.TestCase):
         )
 
     def test_interior_blank_header_column_is_skipped_without_shifting(self):
-        # 読み側は堅牢: 内部の空ヘッダ列の値は dropされるが、右隣の "points" は
-        # 位置どおり正しく対応づく（左シフトしない）。書き側バグの対になる安全側。
+        # 内部の空ヘッダ列の値は除外されるが、右隣の "points" は位置どおり対応する。
         values = [["user", "", "points"], ["alice", "junk", "100"]]
         self.assertEqual(
             _read_records_from_values(values),

@@ -51,6 +51,7 @@ def score_log_totals(score_rows, *, now=None):
     jst = datetime.timezone(datetime.timedelta(hours=9))
     today = (now or datetime.datetime.now(jst)).astimezone(jst).date()
     month_start = today.replace(day=1)
+    next_month_start = (month_start + datetime.timedelta(days=32)).replace(day=1)
     overall = {}
     today_totals = {}
     month_totals = {}
@@ -67,7 +68,7 @@ def score_log_totals(score_rows, *, now=None):
             continue
         if score_date == today:
             today_totals[user] = today_totals.get(user, 0.0) + points
-        if score_date >= month_start:
+        if month_start <= score_date < next_month_start:
             month_totals[user] = month_totals.get(user, 0.0) + points
 
     return overall, today_totals, month_totals
@@ -108,6 +109,8 @@ def summarize_rankings_from_stats(stats_rows, *, score_rows=None, hof_threshold=
         totals = stats_totals(stats_rows)
 
     score_totals, today_totals, month_totals = score_log_totals(score_rows or [])
+    # A first new score is not evidence that all legacy logs are present.
+    # Preserve existing totals until a separate verified reconciliation is done.
     totals = merge_max(totals, score_totals) if totals else score_totals
     hof = {user: points for user, points in totals.items() if points >= hof_threshold}
     return totals, today_totals, month_totals, hof

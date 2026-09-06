@@ -132,15 +132,20 @@ def user_settings_result(user, visibility, payload):
 
 
 def upsert_user_settings(user, ranking_public, *, retries=3, retry_base_sec=0.2):
-    """Read before each attempt, change preference cells only, then verify."""
+    """Attempt one mutation; after an ambiguous response, retry verification only."""
     if not normalize_user(user) or not isinstance(ranking_public, bool):
         return False
     user = normalize_user(user)
     attempts = max(1, retries)
+    write_attempted = False
     for attempt in range(attempts):
         cache_key = None
         try:
-            ws, cache_key, values, headers, _ = _read_settings_sheet()
+            ws, cache_key, values, headers, settings = _read_settings_sheet()
+            if write_attempted:
+                # A newer request may already have changed this user's choice.
+                # Sheets has no conditional write, so never replay an old mutation.
+                return user in settings and settings[user] is ranking_public
             user_idx = headers.index("user")
             public_idx = headers.index("ranking_public")
             updated_idx = headers.index("updated_at")
@@ -156,9 +161,11 @@ def upsert_user_settings(user, ranking_public, *, retries=3, retry_base_sec=0.2)
                 for row_number in matching_rows:
                     for index, value in ((public_idx, public_value), (updated_idx, updated_at)):
                         updates.append({"range": rowcol_to_a1(row_number, index + 1), "values": [[value]]})
+                write_attempted = True
                 ws.batch_update(updates, value_input_option="RAW")
             else:
                 record = {"user": user, "ranking_public": public_value, "updated_at": updated_at}
+                write_attempted = True
                 ws.append_row(sheet_store._row_from_headers(record, headers), value_input_option="RAW")
 
             verified = _read_settings_sheet()[4]

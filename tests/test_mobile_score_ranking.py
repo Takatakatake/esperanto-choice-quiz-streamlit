@@ -76,6 +76,24 @@ class MobileScoreSyncTests(unittest.TestCase):
         append_score.assert_not_called()
         update_totals.assert_not_called()
 
+    @patch.object(mobile_score_sync, "_update_totals")
+    @patch.object(mobile_score_sync, "_append_score")
+    def test_save_rejects_names_that_cannot_read_progress_or_change_visibility(self, append_score, update_totals):
+        for user in ("Audit\tUser", "Audit\nUser", "Audit\x7fUser", 12, {}, ["Alice"]):
+            with self.subTest(user=user):
+                result = mobile_score_sync.save_mobile_score_request(score_payload(user=user))
+                self.assertFalse(result["ok"])
+        append_score.assert_not_called()
+        update_totals.assert_not_called()
+
+    @patch.object(mobile_score_sync, "_update_totals", return_value=(True, True))
+    @patch.object(mobile_score_sync, "_append_score", return_value=True)
+    def test_valid_name_keeps_case_unicode_and_existing_length(self, append_score, update_totals):
+        user = "Alice-Ĉ" + "名" * 40
+        result = mobile_score_sync.save_mobile_score_request(score_payload(user=f"  {user}  "))
+        self.assertTrue(result["ok"])
+        self.assertEqual(append_score.call_args[0][0]["user"], user)
+
 
 class MobileRankingTests(unittest.TestCase):
     def setUp(self):
@@ -97,7 +115,7 @@ class MobileRankingTests(unittest.TestCase):
         self.assertEqual(today, {"A": 10.0})
         self.assertEqual(month, {"A": 10.0, "B": 5.0})
 
-    def test_summarize_rankings_merges_user_stats_with_scores_by_max_total(self):
+    def test_partial_legacy_logs_do_not_erase_larger_existing_ranking_totals(self):
         stats_rows = [
             {"user": "A", "total_points": "100"},
             {"user": "B", "total_points": "20"},
@@ -116,6 +134,27 @@ class MobileRankingTests(unittest.TestCase):
         self.assertEqual(hof, {"A": 100.0})
         self.assertEqual([row["user"] for row in rows], ["A", "C"])
         self.assertEqual(current["user"], "C")
+
+    def test_a_zero_point_log_does_not_prove_historical_total_is_zero(self):
+        totals, _, _, hof = summarize_rankings_from_stats(
+            [{"user": "A", "total_points": 2_000_000}],
+            score_rows=[{"user": "A", "points": 0}],
+        )
+        self.assertEqual(totals, {"A": 2_000_000})
+        self.assertEqual(hof, {"A": 2_000_000})
+
+    def test_month_ranking_excludes_prior_and_future_months_across_year_boundary(self):
+        rows = [
+            {"user": "A", "points": 1, "ts": "2026-11-30T14:59:59Z"},
+            {"user": "A", "points": 2, "ts": "2026-11-30T15:00:00Z"},
+            {"user": "A", "points": 4, "ts": "2026-12-31T14:59:59Z"},
+            {"user": "A", "points": 8, "ts": "2026-12-31T15:00:00Z"},
+        ]
+        now = datetime.datetime(2026, 12, 31, 12, tzinfo=datetime.timezone(datetime.timedelta(hours=9)))
+        overall, today, month = score_log_totals(rows, now=now)
+        self.assertEqual(overall, {"A": 15})
+        self.assertEqual(today, {"A": 4})
+        self.assertEqual(month, {"A": 6})
 
     @patch.object(mobile_ranking, "load_sheet_records")
     def test_mobile_ranking_request_returns_live_rankings(self, load_sheet_records):

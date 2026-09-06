@@ -98,14 +98,46 @@ class UserSettingsTests(unittest.TestCase):
         self.assertEqual(self.sheet.values[1][1:], ["=safe-name", "false", ""])
         self.assertEqual(self.sheet.writes[0][2]["value_input_option"], "RAW")
 
-    def test_retry_after_transient_failure_reads_before_writing_and_does_not_duplicate(self):
+    def test_prewrite_read_failure_can_retry_before_mutating(self):
+        self.sheet.values.append(["alice", "true", "old"])
+        original_read = self.sheet.get_all_values
+        reads = {"count": 0}
+
+        def fail_first_read():
+            reads["count"] += 1
+            if reads["count"] == 1:
+                raise TimeoutError("read failed before any write")
+            return original_read()
+
+        with patch.object(self.sheet, "get_all_values", side_effect=fail_first_read):
+            with patch.object(user_settings.time, "sleep"):
+                self.assertTrue(user_settings.upsert_user_settings("alice", False))
+        self.assertEqual(self.sheet.values[1][1], "false")
+        self.assertEqual(len(self.sheet.writes), 1)
+
+    def test_write_timeout_does_not_retry_unconfirmed_mutation(self):
         self.sheet.values.append(["alice", "true", "old"])
         self.sheet.fail_next_batch = True
         with patch.object(user_settings.time, "sleep") as sleep:
-            self.assertTrue(user_settings.upsert_user_settings("alice", False))
+            self.assertFalse(user_settings.upsert_user_settings("alice", False))
         self.assertEqual(len(self.sheet.values), 2)
-        self.assertEqual(self.sheet.values[1][1], "false")
+        self.assertEqual(self.sheet.values[1][1], "true")
+        self.assertEqual(len(self.sheet.writes), 1)
         sleep.assert_called_once_with(0.2)
+
+    def test_applied_write_with_lost_response_is_confirmed_without_another_write(self):
+        self.sheet.values.append(["alice", "true", "old"])
+        original_batch = self.sheet.batch_update
+
+        def write_then_timeout(*args, **kwargs):
+            original_batch(*args, **kwargs)
+            raise TimeoutError("write response was lost")
+
+        with patch.object(self.sheet, "batch_update", side_effect=write_then_timeout):
+            with patch.object(user_settings.time, "sleep"):
+                self.assertTrue(user_settings.upsert_user_settings("alice", False))
+        self.assertEqual(self.sheet.values[1][1], "false")
+        self.assertEqual(len(self.sheet.writes), 1)
 
     def test_verification_failure_does_not_claim_success_or_expose_backend_details(self):
         original_append = self.sheet.append_row
@@ -135,6 +167,25 @@ class UserSettingsTests(unittest.TestCase):
         self.assertEqual(self.sheet.values[1][1], "false")
         self.assertEqual(len(self.sheet.writes), 1)
         sleep.assert_not_called()
+
+    def test_readback_timeout_does_not_replay_public_over_newer_private_choice(self):
+        self.sheet.values.append(["alice", "false", "old"])
+        real_read = user_settings._read_settings_sheet
+        reads = {"count": 0, "new_private_ok": None}
+
+        def newer_private_before_failed_readback():
+            reads["count"] += 1
+            if reads["count"] == 2:
+                reads["new_private_ok"] = user_settings.upsert_user_settings("alice", False)
+                raise TimeoutError("readback response was lost")
+            return real_read()
+
+        with patch.object(user_settings, "_read_settings_sheet", side_effect=newer_private_before_failed_readback):
+            with patch.object(user_settings.time, "sleep"):
+                self.assertFalse(user_settings.upsert_user_settings("alice", True))
+        self.assertTrue(reads["new_private_ok"])
+        self.assertEqual(self.sheet.values[1][1], "false")
+        self.assertEqual(len(self.sheet.writes), 2)
 
     def test_payload_requires_boolean_and_preserves_name_identity(self):
         with patch.object(user_settings, "upsert_user_settings", return_value=True) as save:

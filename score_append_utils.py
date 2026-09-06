@@ -126,8 +126,9 @@ def _load_headers(ws: gspread.Worksheet, cache_key: Optional[str], *, refresh: b
 
 
 def _write_header_row(ws: gspread.Worksheet, cache_key: Optional[str], headers: list[str]) -> list[str]:
-    normalized = [str(h).strip() for h in headers if str(h).strip()]
-    if not normalized:
+    # Empty header cells still occupy columns containing historical row data.
+    normalized = [str(h).strip() for h in headers]
+    if not any(normalized):
         return []
     end_cell = rowcol_to_a1(1, len(normalized))
     ws.update(f"A1:{end_cell}", [normalized], value_input_option="RAW")
@@ -371,6 +372,9 @@ def upsert_user_total(
                             current_max_total = current_total
                 target_total = expected_total
                 if current_max_total is not None and current_max_total > target_total:
+                    # A lower log snapshot does not prove older totals are wrong
+                    # or that the entire historical log is present. Never repair
+                    # a user's accumulated points downward during an ordinary save.
                     target_total = current_max_total
                 row_values = _row_from_headers(
                     {
