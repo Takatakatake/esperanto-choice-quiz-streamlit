@@ -56,6 +56,14 @@ button {
   min-height: 100dvh;
 }
 
+/* Streamlit disables iframe document scrolling. These views keep a fixed
+   frame height, so their content must scroll inside the app instead. */
+.app-shell:is(.view-quiz, .view-result, .view-history, .view-diagnostics, .view-error) {
+  height: 100dvh;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .top-bar {
   position: sticky;
   top: 0;

@@ -108,14 +108,6 @@ async function expectHistoryHeightStable(page, iframe) {
 }
 
 async function checkLongHistoryScrolling(page, { nested = false } = {}) {
-  await page.addInitScript(() => {
-    if (!location.pathname.includes("/component/mobile_streamlit_bridge.esperanto_mobile_pwa/")) return;
-    localStorage.setItem("esperanto-choice-mobile:history:v2", JSON.stringify(Array.from({ length: 12 }, (_, index) => ({
-      id: `long-history-${index}`, userName: "Review-Long", mode: "vocab", direction: "eo_to_ja",
-      correct: 4, total: 4, accuracy: 1, points: 1000 + index,
-      completedAt: "2026-09-06T00:00:00Z", scoreSyncStatus: "local",
-    }))));
-  });
   const appUrl = localAppUrl(true);
   await page.goto(nested ? localCloudShellUrl(appUrl) : appUrl, { waitUntil: "domcontentloaded" });
   const host = nested ? page.frameLocator("#cloudApp") : page;
@@ -124,6 +116,22 @@ async function checkLongHistoryScrolling(page, { nested = false } = {}) {
   const iframe = host.locator("iframe[title*='esperanto_mobile_pwa']");
   const app = host.frameLocator("iframe[title*='esperanto_mobile_pwa']");
   await expect(app.locator("#startButton")).toBeEnabled({ timeout: 15000 });
+  // Seed the resolved component's own storage, then exercise the real reload
+  // path. A URL-gated init script did not populate these iframe records in CI.
+  const seededCount = await app.locator("body").evaluate(() => {
+    const key = "esperanto-choice-mobile:history:v2";
+    localStorage.setItem(key, JSON.stringify(Array.from({ length: 12 }, (_, index) => ({
+      id: `long-history-${index}`, userName: "Review-Long", mode: "vocab", direction: "eo_to_ja",
+      correct: 4, total: 4, accuracy: 1, points: 1000 + index,
+      completedAt: "2026-09-06T00:00:00Z", scoreSyncStatus: "local",
+    }))));
+    return JSON.parse(localStorage.getItem(key)).length;
+  });
+  expect(seededCount).toBe(12);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expectLocalFixture(host);
+  await expect(app.locator("#startButton")).toBeEnabled({ timeout: 15000 });
+  expect(await app.locator("body").evaluate(() => JSON.parse(localStorage.getItem("esperanto-choice-mobile:history:v2"))?.length)).toBe(12);
   // Match deployed Streamlit's iframe constraint even if a local version defaults differently.
   await iframe.evaluate((element) => element.setAttribute("scrolling", "no"));
   await app.locator("#userName").fill("Review-Long");

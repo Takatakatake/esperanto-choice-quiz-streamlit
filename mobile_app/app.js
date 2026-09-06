@@ -9,7 +9,7 @@ import { buildLocalizedQuestion } from "./quiz_questions.mjs";
 import { inspectLegacySession, commitLegacySessionImport, hasClassicMigrationProvenance, isLegacyScoreSaveBlocked } from "./legacy_session_migration.mjs";
 import { addToOutbox, matchesAccountResult, filterUserHistory, SerializedBridge, DurableScoreOutbox, canReplaceSession, persistPresentSession, isAccountCacheFresh, matchesScoreRecord, scoreRecordFromSession, hasConfirmedScoreEvidence } from "./learning_sync.mjs";
 
-const APP_VERSION = "2026-09-06-unified-learning-2";
+const APP_VERSION = "2026-09-06-unified-learning-3";
 const STORAGE_PREFIX = "esperanto-choice-mobile";
 const SESSION_KEY = `${STORAGE_PREFIX}:session:v2`;
 const SETTINGS_KEY = `${STORAGE_PREFIX}:settings:v2`;
@@ -1669,6 +1669,9 @@ function syncFrameHeight() {
 }
 
 function scrollHostToTop() {
+  if (els.app) {
+    els.app.scrollTop = 0;
+  }
   window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   if (!IS_STREAMLIT_COMPONENT) {
     return;
@@ -3826,6 +3829,7 @@ function ensureTrailingSlash(value) {
 }
 
 function setView(view) {
+  const viewChanged = state.currentView !== view;
   state.currentView = view;
   els.app?.classList.remove("view-loading", "view-setup", "view-quiz", "view-result", "view-history", "view-diagnostics", "view-error");
   els.app?.classList.add(`view-${view}`);
@@ -3853,6 +3857,9 @@ function setView(view) {
   }
   if (view === "diagnostics") {
     renderDiagnostics();
+  }
+  if (viewChanged && els.app) {
+    els.app.scrollTop = 0;
   }
   if (view === "quiz") {
     window.requestAnimationFrame(scrollHostToTop);
