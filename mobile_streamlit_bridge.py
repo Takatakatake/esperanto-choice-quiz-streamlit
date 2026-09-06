@@ -97,7 +97,7 @@ def render_mobile_app_entry(
         iframe[title*="esperanto_mobile_pwa"] {
             display: block !important;
             width: 100% !important;
-            min-height: 640px !important;
+            min-height: min(640px, 100dvh) !important;
             border: 0 !important;
         }
         div[data-testid="stVerticalBlock"],

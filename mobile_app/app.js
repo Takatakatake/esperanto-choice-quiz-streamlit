@@ -914,6 +914,7 @@ const state = {
   session: null,
   history: [],
   currentView: "loading",
+  lastRenderedQuestionKey: "",
   saveTimer: null,
   frameHeightTimer: null,
   lastFrameHeight: 0,
@@ -1632,7 +1633,28 @@ function installFrameHeightSync() {
   }
   window.addEventListener("resize", requestFrameHeightSync);
   window.visualViewport?.addEventListener("resize", requestFrameHeightSync);
+  const hostWindow = frameViewportWindow();
+  if (hostWindow !== window) {
+    hostWindow.addEventListener("resize", requestFrameHeightSync);
+    hostWindow.visualViewport?.addEventListener("resize", requestFrameHeightSync);
+    window.addEventListener("pagehide", (event) => {
+      if (event.persisted) return;
+      hostWindow.removeEventListener("resize", requestFrameHeightSync);
+      hostWindow.visualViewport?.removeEventListener("resize", requestFrameHeightSync);
+    });
+  }
   requestFrameHeightSync();
+}
+
+function frameViewportWindow() {
+  try {
+    // The component's own viewport is the height we previously requested.
+    // Streamlit's parent viewport is the space actually available on screen.
+    if (window.parent !== window && window.parent.document) return window.parent;
+  } catch (_error) {
+    // A host on another origin cannot expose its viewport to this component.
+  }
+  return window;
 }
 
 function requestFrameHeightSync() {
@@ -1647,9 +1669,10 @@ function syncFrameHeight() {
   if (!IS_STREAMLIT_COMPONENT) {
     return;
   }
-  const viewportHeight = Math.ceil(window.visualViewport?.height || window.innerHeight || 720);
+  const viewportWindow = frameViewportWindow();
+  const viewportHeight = Math.ceil(viewportWindow.visualViewport?.height || viewportWindow.innerHeight || 720);
   const screenHeight = Math.ceil(window.screen?.height || viewportHeight);
-  const interactiveHeight = Math.max(640, Math.min(viewportHeight, screenHeight, 900));
+  const interactiveHeight = viewportHeight;
   const minHeight = Math.max(640, Math.min(viewportHeight, screenHeight));
   const contentHeight = Math.ceil(Math.max(
     document.documentElement.scrollHeight,
@@ -1688,12 +1711,14 @@ function scrollHostToTop() {
       parentDoc.scrollingElement.scrollTop = 0;
     }
   } catch (error) {
-    window.parent?.scrollTo?.(0, 0);
+    // Cross-origin containers do not expose their scrolling APIs. Repeating
+    // the same access in this handler would turn that denial into an error.
+    if (error?.name !== "SecurityError") console.warn("Could not reset the host scroll", error);
   }
   try {
     window.top?.scrollTo({ top: 0, left: 0, behavior: "auto" });
   } catch (error) {
-    window.top?.scrollTo?.(0, 0);
+    if (error?.name !== "SecurityError") console.warn("Could not reset the outer page scroll", error);
   }
 }
 
@@ -2422,6 +2447,13 @@ function renderQuiz() {
 
   renderFeedback();
   renderChoices(question);
+  if (!session.showingFeedback) {
+    const questionKey = `${session.id}:${session.inSpartan ? "spartan" : "main"}:${getCurrentQuestionIndex()}:${session.answers.length}`;
+    if (questionKey !== state.lastRenderedQuestionKey) {
+      state.lastRenderedQuestionKey = questionKey;
+      scrollHostToTop();
+    }
+  }
   maybeAutoPlayPromptAudio(session, question);
   queueSessionSave();
 }
