@@ -12,6 +12,8 @@ Initial totals (overall / vocab / sentence):
     Review-B: 1200000 / 1000000 / 200000, private; progress remains readable.
     Review-Long (browser fixture): 7040 / 200 / 6840, private; 18 sentence
         categories with four subtopics each, ending with Time & Weather.
+        Noun 120 includes beginner 20, intermediate 30, advanced 40,
+        mixed beginner+intermediate 20, unknown level 10; verb beginner 80.
 Other names start with zero points and the normal public default.
 All seeded records use today's timestamp for the today/month ranking checks.
 """
@@ -116,8 +118,12 @@ class MemorySheetStore:
                 "Communication Means", "Time & Weather",
             ]
             records.extend([
-                {"user": "Review-Long", "mode": "vocab", "pos": "noun", "points": 120, "save_id": "fixture-long-noun"},
-                {"user": "Review-Long", "mode": "vocab", "pos": "verb", "points": 80, "save_id": "fixture-long-verb"},
+                {"user": "Review-Long", "mode": "vocab", "pos": "noun", "group_id": "noun:beginner_1:g1", "points": 20, "save_id": "fixture-long-noun-beginner"},
+                {"user": "Review-Long", "mode": "vocab", "pos": "noun", "group_id": "noun:intermediate_2:g1", "points": 30, "save_id": "fixture-long-noun-intermediate"},
+                {"user": "Review-Long", "mode": "vocab", "pos": "noun", "group_id": "noun:advanced_3:g1", "points": 40, "save_id": "fixture-long-noun-advanced"},
+                {"user": "Review-Long", "mode": "vocab", "pos": "noun", "group_id": "noun:beginner_3+intermediate_1:g1", "points": 20, "save_id": "fixture-long-noun-mixed"},
+                {"user": "Review-Long", "mode": "vocab", "pos": "noun", "points": 10, "save_id": "fixture-long-noun-unknown"},
+                {"user": "Review-Long", "mode": "vocab", "pos": "verb", "group_id": "verb:beginner_2:g1", "points": 80, "save_id": "fixture-long-verb"},
             ])
             for topic_index, topic in enumerate(topics):
                 subtopics = ["Calendar", "Telling the Time", "Time Expressions", "Weather"] if topic == "Time & Weather" else [

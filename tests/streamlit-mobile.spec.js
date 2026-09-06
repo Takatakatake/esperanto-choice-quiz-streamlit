@@ -138,9 +138,22 @@ async function checkLongHistoryScrolling(page, { nested = false } = {}) {
   await app.locator("#historyNav").click();
   await expect(app.locator("#progressContent .progress-totals strong")).toHaveText(["7040.0点", "200.0点", "6840.0点"], { timeout: 15000 });
   await expect(app.locator("#rankingStatus")).toContainText("ランキングを表示しました", { timeout: 15000 });
-  await expect(app.locator("#progressContent details")).toHaveCount(18);
+  const vocabCategories = app.locator('[data-progress-mode="vocab"] details');
+  const sentenceCategories = app.locator('[data-progress-mode="sentence"] details');
+  await expect(vocabCategories).toHaveCount(2);
+  await expect(sentenceCategories).toHaveCount(18);
+  await expect(app.locator("#progressContent details[open]")).toHaveCount(0);
   await expect(app.locator("#historyList .history-item")).toHaveCount(12);
-  const finalCategory = app.locator("#progressContent details").last();
+  const noun = vocabCategories.first();
+  const nounSummary = noun.locator("summary");
+  await expect(nounSummary).toHaveText("名詞120.0点");
+  const nounBox = await wheelToTarget(page, iframe, nounSummary, "Vocabulary category heading");
+  await page.mouse.click(nounBox.point.x, nounBox.point.y);
+  await expect(noun).toHaveAttribute("open", "");
+  const nounLevels = noun.locator(":scope > .progress-category-row");
+  await expect(nounLevels).toHaveText(["初級20.0点", "中級30.0点", "上級40.0点", "初級＋中級20.0点", "レベル不明10.0点"]);
+  await wheelToTarget(page, iframe, nounLevels.last(), "Last expanded vocabulary level");
+  const finalCategory = sentenceCategories.last();
   const summary = finalCategory.locator("summary");
   await expect(summary).toHaveText("Time & Weather40.0点");
 
@@ -168,6 +181,9 @@ async function checkLongHistoryScrolling(page, { nested = false } = {}) {
   const expandedSummaryBox = await wheelToTarget(page, iframe, summary, "Expanded category heading on return");
   await page.mouse.click(expandedSummaryBox.point.x, expandedSummaryBox.point.y);
   await expect(finalCategory).not.toHaveAttribute("open", "");
+  const expandedNounBox = await wheelToTarget(page, iframe, nounSummary, "Expanded vocabulary heading on return");
+  await page.mouse.click(expandedNounBox.point.x, expandedNounBox.point.y);
+  await expect(noun).not.toHaveAttribute("open", "");
   await expectHistoryHeightStable(page, iframe);
   await wheelToTarget(page, iframe, lastHistory, "History end after collapsing details");
   await wheelToTarget(page, iframe, app.locator("#koAppLink"), "Language links at the page footer");
@@ -219,6 +235,70 @@ for (const nested of [false, true]) {
   test(`long history remains wheel-scrollable on mobile ${nested ? "inside the Cloud shell" : "with iframe scrolling disabled"}`, async ({ page }) => {
     test.setTimeout(90000);
     await checkLongHistoryScrolling(page, { nested });
+  });
+}
+
+for (const locale of [
+  { lang: "ja", noun: "名詞", verb: "動詞", levels: ["初級", "中級", "上級"], unknown: "レベル不明", unit: "点" },
+  { lang: "zh", noun: "名词", verb: "动词", levels: ["初级", "中级", "高级"], unknown: "级别不明", unit: "分" },
+  { lang: "ko", noun: "명사", verb: "동사", levels: ["초급", "중급", "고급"], unknown: "수준 미상", unit: "점" },
+]) {
+  test(`vocabulary level progress is collapsed, localized and isolated by account in ${locale.lang}`, async ({ page }) => {
+    const url = new URL(localAppUrl(true));
+    url.searchParams.set("lang", locale.lang);
+    await page.goto(url.href, { waitUntil: "domcontentloaded" });
+    await expectLocalFixture(page);
+    const app = page.frameLocator("iframe[title*='esperanto_mobile_pwa']");
+    await expect(app.locator("#startButton")).toBeEnabled({ timeout: 15000 });
+    await expect(app.locator("#setupView")).toHaveClass(/is-active/);
+    await app.locator("#userName").fill("Review-Long");
+    await app.locator("#historyNav").click();
+    const vocab = app.locator('[data-progress-mode="vocab"]');
+    const nouns = vocab.locator("details").filter({ has: app.locator("summary", { hasText: locale.noun }) });
+    await expect(app.locator("#progressContent .progress-totals strong")).toHaveText(
+      [7040, 200, 6840].map((points) => `${points.toFixed(1)}${locale.unit}`), { timeout: 15000 },
+    );
+    await expect(vocab.locator("details")).toHaveCount(2);
+    await expect(vocab.locator("details[open]")).toHaveCount(0);
+    await expect(nouns.locator("summary")).toHaveText(`${locale.noun}120.0${locale.unit}`);
+    const rows = nouns.locator(":scope > .progress-category-row");
+    await expect(rows.first()).not.toBeVisible();
+    // Native summary keyboard activation must work as well as clicking its triangle.
+    await nouns.locator("summary").focus();
+    await nouns.locator("summary").press("Enter");
+    await expect(nouns).toHaveAttribute("open", "");
+    await expect(rows).toHaveText([
+      `${locale.levels[0]}20.0${locale.unit}`,
+      `${locale.levels[1]}30.0${locale.unit}`,
+      `${locale.levels[2]}40.0${locale.unit}`,
+      `${locale.levels[0]}＋${locale.levels[1]}20.0${locale.unit}`,
+      `${locale.unknown}10.0${locale.unit}`,
+    ]);
+    await expect(rows.last()).toBeVisible();
+
+    const verbs = vocab.locator("details").filter({ has: app.locator("summary", { hasText: locale.verb }) });
+    await verbs.locator("summary").click();
+    await expect(verbs.locator(":scope > .progress-category-row")).toHaveText([
+      `${locale.levels[0]}80.0${locale.unit}`, `${locale.levels[1]}0.0${locale.unit}`, `${locale.levels[2]}0.0${locale.unit}`,
+    ]);
+    await nouns.locator("summary").click();
+    await expect(nouns).not.toHaveAttribute("open", "");
+    await expect(rows.first()).not.toBeVisible();
+
+    await app.locator("#historyUserName").fill("Review-A");
+    await app.locator("#historyUserButton").click();
+    await expect(app.locator("#progressContent .progress-totals strong")).toHaveText(
+      [200, 150, 50].map((points) => `${points.toFixed(1)}${locale.unit}`), { timeout: 15000 },
+    );
+    await expect(vocab.locator("details[open]")).toHaveCount(0);
+    await expect(nouns.locator("summary")).toHaveText(`${locale.noun}120.0${locale.unit}`);
+    await nouns.locator("summary").click();
+    await expect(rows).toHaveText([
+      `${locale.levels[0]}0.0${locale.unit}`, `${locale.levels[1]}0.0${locale.unit}`, `${locale.levels[2]}0.0${locale.unit}`,
+      `${locale.unknown}120.0${locale.unit}`,
+    ]);
+    await expect(vocab).not.toContainText(`${locale.levels[0]}＋${locale.levels[1]}`);
+    await expect(app.locator("#rankingPublic")).toBeChecked();
   });
 }
 
