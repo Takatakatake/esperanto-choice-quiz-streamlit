@@ -80,7 +80,7 @@ def load_mobile_rankings_request(payload):
     if visibility is None:
         return _ranking_result(payload, ok=False, message=_msg(payload, "settings_failed"))
 
-    stats_rows = load_sheet_records(USER_STATS_SHEET, refresh=True)
+    stats_rows = load_sheet_records(USER_STATS_SHEET, refresh=True, required_headers=("user", "total_points"))
     score_rows = load_sheet_records(SCORES_SHEET, refresh=True, required_headers=("user", "points"))
 
     if stats_rows is None and score_rows is None:

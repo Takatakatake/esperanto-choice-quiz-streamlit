@@ -9,7 +9,7 @@ import { buildLocalizedQuestion } from "./quiz_questions.mjs";
 import { inspectLegacySession, commitLegacySessionImport, hasClassicMigrationProvenance, isLegacyScoreSaveBlocked } from "./legacy_session_migration.mjs";
 import { addToOutbox, matchesAccountResult, filterUserHistory, SerializedBridge, DurableScoreOutbox, canReplaceSession, persistPresentSession, isAccountCacheFresh, matchesScoreRecord, scoreRecordFromSession, hasConfirmedScoreEvidence } from "./learning_sync.mjs";
 
-const APP_VERSION = "2026-09-07-vocab-levels-1";
+const APP_VERSION = "2026-09-07-save-recovery-1";
 const STORAGE_PREFIX = "esperanto-choice-mobile";
 const SESSION_KEY = `${STORAGE_PREFIX}:session:v2`;
 const SETTINGS_KEY = `${STORAGE_PREFIX}:settings:v2`;
@@ -993,7 +993,7 @@ async function init() {
   }
   restorePendingScores();
   inspectStoredLegacyQuiz();
-  updateSaveStatus(t("ready"));
+  updateSaveStatus(t(state.session?.historySavePending === true ? "saveFailed" : "ready"));
 }
 
 function bindEvents() {
@@ -1070,10 +1070,7 @@ function bindEvents() {
       return;
     }
     if (window.confirm(t("clearHistoryConfirm"))) {
-      state.history = state.history.filter((record) => String(record.userName || "").trim() !== currentUserName());
-      saveHistory();
-      renderHistory();
-      showToast(t("clearHistoryDone"));
+      clearUserHistory();
     }
   });
   els.rankingRefreshButton.addEventListener("click", () => requestRankings({ force: true }));
@@ -1996,12 +1993,12 @@ function saveSettings() {
   return writeJson(SETTINGS_KEY, state.settings, { allowRecovery: false });
 }
 
-function saveSession() {
+function saveSession({ allowRecovery = true } = {}) {
   return persistPresentSession(state.session, (session) => {
     session.updatedAt = new Date().toISOString();
     // A failed confirmation write must not delete the history's only durable acknowledgement.
-    const saved = writeJson(SESSION_KEY, session, { allowRecovery: session.scoreSyncStatus !== "saved" });
-    if (saved) updateSaveStatus(t("autoSaved"));
+    const saved = writeJson(SESSION_KEY, session, { allowRecovery: allowRecovery && session.scoreSyncStatus !== "saved" });
+    if (saved) updateSaveStatus(t(session.historySavePending === true ? "saveFailed" : "autoSaved"));
     return saved;
   });
 }
@@ -2047,7 +2044,25 @@ function queueSessionSave() {
 
 function saveHistory({ allowRecovery = true } = {}) {
   state.history = state.history.slice(0, HISTORY_MAX_ITEMS);
-  writeJson(HISTORY_KEY, state.history, { allowRecovery });
+  return writeJson(HISTORY_KEY, state.history, { allowRecovery });
+}
+
+function clearUserHistory() {
+  const session = state.session;
+  if (isCompleteSession(session) && session.historySavePending === true
+      && String(session.settings.userName || "").trim() === currentUserName()) {
+    // Persist the explicit dismissal before deleting rows, so reload cannot recreate them.
+    session.historySavePending = false;
+    if (!saveSession({ allowRecovery: false })) {
+      session.historySavePending = true;
+      return false;
+    }
+  }
+  state.history = state.history.filter((record) => String(record.userName || "").trim() !== currentUserName());
+  const saved = saveHistory();
+  renderHistory();
+  showToast(t(saved ? "clearHistoryDone" : "saveFailed"));
+  return saved;
 }
 
 function requestRankings({ force = false } = {}) {
@@ -2638,7 +2653,18 @@ function finishSession() {
   session.completedAt = session.completedAt || new Date().toISOString();
   const summary = computeResultSummary(session);
   session.finalPoints = summary.points;
-  if (!session.savedToHistory) {
+  saveCompletedSessionHistory(session, summary);
+  saveSession();
+  refreshResumeButton();
+  enqueueCompletedScore(session);
+}
+
+function saveCompletedSessionHistory(session, summary = computeResultSummary(session)) {
+  // A false pending flag also records explicit history deletion; only true flags are retried on reload.
+  if (session.savedToHistory || session.historySavePending === false) return true;
+  const matchesSession = (record) => record.id === session.id
+    && String(record.userName || "").trim() === String(session.settings.userName || "").trim();
+  if (!state.history.some(matchesSession)) {
     state.history.unshift({
       id: session.id,
       userName: session.settings.userName,
@@ -2654,13 +2680,13 @@ function finishSession() {
         : session.scoreSyncStatus === "saved" ? "saved"
           : IS_STREAMLIT_COMPONENT && session.settings.userName ? "pending" : "local",
     });
-    state.history = state.history.slice(0, HISTORY_MAX_ITEMS);
-    session.savedToHistory = true;
-    saveHistory();
   }
-  saveSession();
-  refreshResumeButton();
-  enqueueCompletedScore(session);
+  const saved = saveHistory();
+  // Quota recovery may persist an empty list, which does not save this result.
+  session.savedToHistory = saved && state.history.some(matchesSession);
+  session.historySavePending = !session.savedToHistory;
+  if (session.historySavePending) updateSaveStatus(t("saveFailed"));
+  return session.savedToHistory;
 }
 
 function renderResult() {
@@ -2945,6 +2971,10 @@ function pumpScoreOutbox() {
 
 function retryPendingScores(user) {
   loadPendingScoresFromStorage();
+  if (isCompleteSession(state.session) && state.session.historySavePending === true) {
+    saveCompletedSessionHistory(state.session);
+    saveSession();
+  }
   state.outbox.forEach((entry) => {
     if ((user === undefined || entry.payload.user === user) && !bridgeQueue.has(entry.payload.requestId)) {
       entry.status = "pending";

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import threading
 import time
+import weakref
 from typing import Dict, Optional
 
 import gspread
@@ -29,6 +31,8 @@ _HEADER_CACHE: Dict[str, list[str]] = {}
 _RECENT_SAVE_IDS: Dict[str, set[str]] = {}
 _RECENT_SAVE_IDS_LIMIT = 2048
 _STATS_REQUIRED_HEADERS = ["user", "total_points", "last_updated"]
+_USER_TOTAL_LOCKS = weakref.WeakValueDictionary()
+_USER_TOTAL_LOCKS_GUARD = threading.Lock()
 
 
 def _to_plain_dict(value) -> Dict:
@@ -333,6 +337,19 @@ def compute_user_score_totals(records, user: str) -> Dict[str, float]:
     return totals
 
 
+def _user_total_lock(cache_key: Optional[str], worksheet_name: str, user: str):
+    # Streamlit sessions share this process. Keep their read/modify/write cycles
+    # separate per account and sheet; other processes still require reconciliation.
+    # Waiting/active callers retain the lock, while idle account keys can disappear.
+    key = (cache_key or worksheet_name, user)
+    with _USER_TOTAL_LOCKS_GUARD:
+        lock = _USER_TOTAL_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _USER_TOTAL_LOCKS[key] = lock
+        return lock
+
+
 def upsert_user_total(
     worksheet_name: str,
     *,
@@ -355,53 +372,54 @@ def upsert_user_total(
             last_error = RuntimeError(f"{worksheet_name} worksheet is unavailable")
         else:
             try:
-                headers = _ensure_headers(ws, cache_key, _STATS_REQUIRED_HEADERS)
-                if not headers:
-                    raise RuntimeError(f"{worksheet_name} headers are unavailable")
-                user_idx = headers.index("user")
-                total_idx = headers.index("total_points")
-                values = _read_sheet_values(ws)
-                existing_rows = []
-                current_max_total = None
-                for row_number, row in enumerate(values[1:], start=2):
-                    current_user = row[user_idx].strip() if user_idx < len(row) else ""
-                    if current_user == normalized_user:
-                        existing_rows.append(row_number)
-                        current_total = _safe_float(row[total_idx] if total_idx < len(row) else 0.0, 0.0)
-                        if current_max_total is None or current_total > current_max_total:
-                            current_max_total = current_total
-                target_total = expected_total
-                if current_max_total is not None and current_max_total > target_total:
-                    # A lower log snapshot does not prove older totals are wrong
-                    # or that the entire historical log is present. Never repair
-                    # a user's accumulated points downward during an ordinary save.
-                    target_total = current_max_total
-                row_values = _row_from_headers(
-                    {
-                        "user": normalized_user,
-                        "total_points": target_total,
-                        "last_updated": last_updated,
-                    },
-                    headers,
-                )
-                if existing_rows:
-                    for row_number in existing_rows:
-                        start_cell = rowcol_to_a1(row_number, 1)
-                        end_cell = rowcol_to_a1(row_number, len(headers))
-                        ws.update(f"{start_cell}:{end_cell}", [row_values], value_input_option="RAW")
-                else:
-                    ws.append_row(row_values, value_input_option="RAW")
+                with _user_total_lock(cache_key, worksheet_name, normalized_user):
+                    headers = _ensure_headers(ws, cache_key, _STATS_REQUIRED_HEADERS)
+                    if not headers:
+                        raise RuntimeError(f"{worksheet_name} headers are unavailable")
+                    user_idx = headers.index("user")
+                    total_idx = headers.index("total_points")
+                    values = _read_sheet_values(ws)
+                    existing_rows = []
+                    current_max_total = None
+                    for row_number, row in enumerate(values[1:], start=2):
+                        current_user = row[user_idx].strip() if user_idx < len(row) else ""
+                        if current_user == normalized_user:
+                            existing_rows.append(row_number)
+                            current_total = _safe_float(row[total_idx] if total_idx < len(row) else 0.0, 0.0)
+                            if current_max_total is None or current_total > current_max_total:
+                                current_max_total = current_total
+                    target_total = expected_total
+                    if current_max_total is not None and current_max_total > target_total:
+                        # A lower log snapshot does not prove older totals are wrong
+                        # or that the entire historical log is present. Never repair
+                        # a user's accumulated points downward during an ordinary save.
+                        target_total = current_max_total
+                    row_values = _row_from_headers(
+                        {
+                            "user": normalized_user,
+                            "total_points": target_total,
+                            "last_updated": last_updated,
+                        },
+                        headers,
+                    )
+                    if existing_rows:
+                        for row_number in existing_rows:
+                            start_cell = rowcol_to_a1(row_number, 1)
+                            end_cell = rowcol_to_a1(row_number, len(headers))
+                            ws.update(f"{start_cell}:{end_cell}", [row_values], value_input_option="RAW")
+                    else:
+                        ws.append_row(row_values, value_input_option="RAW")
 
-                verify_records = load_sheet_records(worksheet_name, refresh=True)
-                if verify_records is None:
-                    raise RuntimeError(f"{worksheet_name} verification read failed")
-                for record in verify_records:
-                    if str(record.get("user", "")).strip() != normalized_user:
-                        continue
-                    actual_total = _safe_float(record.get("total_points"), 0.0)
-                    if abs(actual_total - target_total) <= 0.001 or actual_total > target_total:
-                        return True
-                raise RuntimeError(f"{worksheet_name} verification could not confirm {normalized_user}")
+                    verify_records = load_sheet_records(worksheet_name, refresh=True)
+                    if verify_records is None:
+                        raise RuntimeError(f"{worksheet_name} verification read failed")
+                    for record in verify_records:
+                        if str(record.get("user", "")).strip() != normalized_user:
+                            continue
+                        actual_total = _safe_float(record.get("total_points"), 0.0)
+                        if abs(actual_total - target_total) <= 0.001 or actual_total > target_total:
+                            return True
+                    raise RuntimeError(f"{worksheet_name} verification could not confirm {normalized_user}")
             except Exception as exc:
                 last_error = exc
                 _invalidate_cache(cache_key)
