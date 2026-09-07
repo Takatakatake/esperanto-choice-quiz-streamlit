@@ -361,6 +361,61 @@ test("mobile result and history stay readable", async ({ page }) => {
   await expect(errors).toEqual([]);
 });
 
+test("failed history writes recover on reload without duplicates or restoring cleared history", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(localAppUrl(), { waitUntil: "networkidle" });
+  await expect(page.locator("#setupView")).toHaveClass(/is-active/);
+  // Only this document fails writes: reloading models storage becoming available.
+  await page.evaluate(() => {
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function failingHistoryWrite(key, value) {
+      if (key === "esperanto-choice-mobile:history:v2") {
+        throw new DOMException("History storage temporarily unavailable", "SecurityError");
+      }
+      return original.call(this, key, value);
+    };
+  });
+  await page.locator("#audioMode").selectOption("off");
+  await page.locator("#spartanMode").uncheck();
+  await page.locator("#startButton").click();
+  await answerRemainingCorrectly(page, page);
+  await expect(page.locator("#resultView")).toHaveClass(/is-active/);
+  const failed = await page.evaluate(() => ({
+    session: JSON.parse(localStorage.getItem("esperanto-choice-mobile:session:v2")),
+    history: JSON.parse(localStorage.getItem("esperanto-choice-mobile:history:v2")),
+  }));
+  expect(failed.session.savedToHistory).toBe(false);
+  expect(failed.history).toBeNull();
+  await expect(page.locator("#saveStatus")).toContainText("保存できません");
+
+  await page.reload({ waitUntil: "networkidle" });
+  await expect(page.locator("#resultView")).toHaveClass(/is-active/);
+  const recovered = await page.evaluate(() => ({
+    session: JSON.parse(localStorage.getItem("esperanto-choice-mobile:session:v2")),
+    history: JSON.parse(localStorage.getItem("esperanto-choice-mobile:history:v2")),
+  }));
+  expect(recovered.session.id).toBe(failed.session.id);
+  expect(recovered.session.finalPoints).toBe(failed.session.finalPoints);
+  expect(recovered.session.savedToHistory).toBe(true);
+  expect(recovered.history).toHaveLength(1);
+  expect(recovered.history[0].id).toBe(failed.session.id);
+  expect(recovered.history[0].points).toBe(failed.session.finalPoints);
+  await page.reload({ waitUntil: "networkidle" });
+  await expect(page.locator("#resultView")).toHaveClass(/is-active/);
+  await page.locator("#historyNav").click();
+  await expect(page.locator("#historyList article.history-item")).toHaveCount(1);
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#clearHistoryButton").click();
+  await expect(page.locator("#historyList article.history-item")).toHaveCount(0);
+  await page.reload({ waitUntil: "networkidle" });
+  await expect(page.locator("#resultView")).toHaveClass(/is-active/);
+  await page.locator("#historyNav").click();
+  await expect(page.locator("#historyList article.history-item")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test("mobile review can replay the Esperanto correct answer", async ({ page }) => {
   const errors = [];
   page.on("console", (message) => {

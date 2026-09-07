@@ -377,6 +377,7 @@ const scoreAppFunctions = [
   "persistOutboxEntry", "enqueueCompletedScore", "restorePendingScores", "updateScoreRecord", "refreshScoreViews",
   "pumpScoreOutbox", "retryPendingScores", "handleScoreSyncResult", "handleBridgeTimeout", "saveSession", "saveHistory", "saveSettings",
   "buildScoreSyncPayload", "writeJson", "recoverLocalStorageWrite", "isQuotaExceededError", "isPlainObject", "isCompleteSession",
+  "finishSession", "saveCompletedSessionHistory", "clearUserHistory",
 ].map((name) => {
   const start = scoreAppSource.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, `Application handler ${name} must exist`);
@@ -400,7 +401,7 @@ function restoredScoreApp(storage) {
     isLegacyScoreSaveBlocked: () => false, currentUserName: () => state.session?.settings.userName || "",
     createId: () => `app-request-${++requestId}`, t: (key) => key,
     console: { warn: () => {} }, showToast: () => {}, updateSaveStatus: (message) => saveStatuses.push(message),
-    renderResult: () => {}, renderHistory: () => {}, requestProgress: () => {}, requestRankings: () => {},
+    renderResult: () => {}, renderHistory: () => {}, refreshResumeButton: () => {}, requestProgress: () => {}, requestRankings: () => {},
     APP_VERSION: "test", IS_STREAMLIT_COMPONENT: true,
     SESSION_KEY: sessionKey, HISTORY_KEY: historyKey, SETTINGS_KEY: settingsKey, OUTBOX_KEY: legacyKey, OUTBOX_ENTRY_PREFIX: prefix,
     HISTORY_MAX_ITEMS: 100, HISTORY_RECOVERY_LIMITS: [50, 20, 5, 0],
@@ -636,4 +637,135 @@ test("unreadable receipts cannot authorize deleting saved history during quota r
   instance.app.saveHistory();
   assert.deepEqual(storage.values, before);
   assert.equal(instance.saveStatuses.at(-1), "saveFailed");
+});
+
+function storageWithCompletedSession() {
+  const storage = new SharedStorage();
+  storage.setItem(sessionKey, JSON.stringify(completedSession()));
+  return storage;
+}
+
+test("failed completion history remains unsaved and visible, then recovers once on reload", () => {
+  const storage = storageWithCompletedSession();
+  storage.failWrite = (key) => key === historyKey;
+  const instance = restoredScoreApp(storage);
+  instance.app.finishSession();
+  instance.app.finishSession();
+  assert.equal(instance.state.history.length, 1, "Repeated completion must not append the failed row twice");
+  assert.equal(storage.getItem(historyKey), null);
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).savedToHistory, false);
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).historySavePending, true);
+  assert.equal(instance.saveStatuses.at(-1), "saveFailed", "Successful session/outbox writes must not hide failed history");
+
+  const stillFailing = restoredScoreApp(storage);
+  stillFailing.app.restorePendingScores();
+  assert.equal(stillFailing.state.session.savedToHistory, false);
+  assert.equal(stillFailing.saveStatuses.at(-1), "saveFailed");
+
+  storage.failWrite = () => false;
+  const recovered = restoredScoreApp(storage);
+  recovered.app.restorePendingScores();
+  recovered.app.retryPendingScores();
+  recovered.app.finishSession();
+  const history = JSON.parse(storage.getItem(historyKey));
+  assert.equal(history.length, 1);
+  assert.equal(history[0].id, "ack");
+  assert.equal(history[0].userName, "A");
+  assert.equal(history[0].points, 15);
+  assert.equal(history[0].scoreSaveId, "save-ack");
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).savedToHistory, true);
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).historySavePending, false);
+});
+
+test("history recovery that can store only an empty list cannot mark the result saved", () => {
+  const storage = storageWithCompletedSession();
+  storage.failWrite = (key, raw) => key === historyKey && JSON.parse(raw).length > 0;
+  const instance = restoredScoreApp(storage);
+  instance.app.finishSession();
+  assert.deepEqual(JSON.parse(storage.getItem(historyKey)), []);
+  assert.equal(instance.state.session.savedToHistory, false);
+  assert.equal(instance.state.session.historySavePending, true);
+  assert.equal(instance.saveStatuses.at(-1), "saveFailed");
+  storage.failWrite = () => false;
+  instance.app.retryPendingScores();
+  assert.equal(JSON.parse(storage.getItem(historyKey)).length, 1);
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).savedToHistory, true);
+});
+
+test("a failed session flag write can retry without duplicating its persisted history row", () => {
+  const storage = storageWithCompletedSession();
+  const session = JSON.parse(storage.getItem(sessionKey));
+  session.historySavePending = true;
+  session.savedToHistory = false;
+  session.scoreSyncStatus = "saved";
+  storage.setItem(sessionKey, JSON.stringify(session));
+  storage.failWrite = (key) => key === sessionKey;
+  const instance = restoredScoreApp(storage);
+  instance.app.retryPendingScores();
+  assert.equal(JSON.parse(storage.getItem(historyKey)).length, 1);
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).historySavePending, true);
+  storage.failWrite = () => false;
+  const recovered = restoredScoreApp(storage);
+  recovered.app.restorePendingScores();
+  assert.equal(JSON.parse(storage.getItem(historyKey)).length, 1);
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).savedToHistory, true);
+  assert.equal(recovered.sent.length, 0, "History recovery must not resend a confirmed cloud score");
+});
+
+for (const savedToHistory of [true, false]) {
+  test(`an existing completed session with savedToHistory=${savedToHistory} and no retry marker does not recreate removed history`, () => {
+    const storage = storageWithCompletedSession();
+    const session = JSON.parse(storage.getItem(sessionKey));
+    session.savedToHistory = savedToHistory;
+    storage.setItem(sessionKey, JSON.stringify(session));
+    const instance = restoredScoreApp(storage);
+    instance.app.restorePendingScores();
+    instance.app.retryPendingScores();
+    assert.equal(storage.getItem(historyKey), null);
+    assert.equal(instance.state.history.length, 0);
+  });
+}
+
+test("explicitly clearing a failed history result cancels its retry across reload", () => {
+  const storage = storageWithCompletedSession();
+  storage.failWrite = (key) => key === historyKey;
+  const instance = restoredScoreApp(storage);
+  instance.app.finishSession();
+  assert.equal(instance.state.session.historySavePending, true);
+  storage.failWrite = () => false;
+  assert.equal(instance.app.clearUserHistory(), true);
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).savedToHistory, false);
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).historySavePending, false);
+  const reloaded = restoredScoreApp(storage);
+  reloaded.app.restorePendingScores();
+  reloaded.app.finishSession();
+  assert.deepEqual(JSON.parse(storage.getItem(historyKey)), []);
+  assert.equal(reloaded.state.history.length, 0);
+});
+
+test("a failed history retry dismissal preserves the pending result and existing history", () => {
+  const storage = seededScoreStorage();
+  const session = JSON.parse(storage.getItem(sessionKey));
+  session.historySavePending = true;
+  session.savedToHistory = false;
+  storage.setItem(sessionKey, JSON.stringify(session));
+  const historyBefore = storage.getItem(historyKey);
+  storage.failWrite = (key) => key === sessionKey;
+  const instance = restoredScoreApp(storage);
+  assert.equal(instance.app.clearUserHistory(), false);
+  assert.equal(instance.state.session.historySavePending, true);
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).historySavePending, true);
+  assert.equal(storage.getItem(historyKey), historyBefore);
+  assert.equal(instance.state.history.length, 1);
+  assert.equal(instance.saveStatuses.at(-1), "saveFailed");
+});
+
+test("successful completion saves one history row and reports persistence success", () => {
+  const storage = storageWithCompletedSession();
+  const instance = restoredScoreApp(storage);
+  instance.app.finishSession();
+  instance.app.finishSession();
+  assert.equal(JSON.parse(storage.getItem(historyKey)).length, 1);
+  assert.equal(JSON.parse(storage.getItem(sessionKey)).savedToHistory, true);
+  assert.equal(instance.saveStatuses.at(-1), "autoSaved");
 });
