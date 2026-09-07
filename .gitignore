@@ -23,3 +23,6 @@ playwright-report/
 
 # Local audio replacement backups
 Esperanto例文5000文_収録音声/archived_replaced_audio_*/
+
+# Node dependencies are restored with npm ci.
+node_modules/
