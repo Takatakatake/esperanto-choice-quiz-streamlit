@@ -9,7 +9,7 @@ import { buildLocalizedQuestion } from "./quiz_questions.mjs";
 import { inspectLegacySession, commitLegacySessionImport, hasClassicMigrationProvenance, isLegacyScoreSaveBlocked } from "./legacy_session_migration.mjs";
 import { addToOutbox, matchesAccountResult, filterUserHistory, SerializedBridge, DurableScoreOutbox, canReplaceSession, persistPresentSession, isAccountCacheFresh, matchesScoreRecord, scoreRecordFromSession, hasConfirmedScoreEvidence } from "./learning_sync.mjs";
 
-const APP_VERSION = "2026-09-07-save-recovery-1";
+const APP_VERSION = "2026-09-07-history-recovery-2";
 const STORAGE_PREFIX = "esperanto-choice-mobile";
 const SESSION_KEY = `${STORAGE_PREFIX}:session:v2`;
 const SETTINGS_KEY = `${STORAGE_PREFIX}:settings:v2`;
@@ -63,6 +63,7 @@ const TARGET_LANG_META = {
       legacyUnknownSaveHint: "旧版の保存状況を確認できないため、この結果は閲覧のみで引き継ぎます。重複加算を防ぐため再送は行いません。",
       rankingVisibilityUpdating: "公開設定を確認してからランキングを更新します。",
       saveBeforeNewQuiz: "この結果の未送信データを保存できていません。結果を保持しました。保存を再試行してから新しいクイズを始めてください。",
+      historyBeforeNewQuiz: "この結果を端末の履歴に保存できていないため、結果を保持しました。保存できる状態になったら、もう一度「新しいクイズ」を押すと保存を再試行します。",
       legacyTitle: "旧版の学習データがあります",
       legacyImport: "この画面に引き継ぐ",
       legacyResumeHint: "保存されていた問題と得点を引き継いで再開できます。旧版の保存データも残ります。",
@@ -274,6 +275,7 @@ const TARGET_LANG_META = {
       legacyUnknownSaveHint: "无法确认旧版的保存状态，此结果只能查看。为防止重复计分，不会重发。",
       rankingVisibilityUpdating: "确认公开设置后将更新排行榜。",
       saveBeforeNewQuiz: "待发送结果尚未安全保存，当前结果已保留。请重试保存后再开始新测验。",
+      historyBeforeNewQuiz: "此结果尚未保存到本机历史记录，当前结果已保留。恢复存储后，再次点击“新测验”即可重试保存。",
       legacyTitle: "发现旧版学习数据",
       legacyImport: "导入到此界面",
       legacyResumeHint: "可以保留原题目和得分继续测验。旧版数据也会保留。",
@@ -485,6 +487,7 @@ const TARGET_LANG_META = {
       legacyUnknownSaveHint: "이전 저장 상태를 확인할 수 없어 이 결과는 보기 전용으로 가져옵니다. 중복 합산을 막기 위해 재전송하지 않습니다.",
       rankingVisibilityUpdating: "공개 설정을 확인한 후 랭킹을 업데이트합니다.",
       saveBeforeNewQuiz: "미전송 결과를 저장하지 못해 현재 결과를 유지했습니다. 저장을 다시 시도한 후 새 퀴즈를 시작해 주세요.",
+      historyBeforeNewQuiz: "이 결과를 기기 학습 기록에 저장하지 못해 결과를 유지했습니다. 저장이 가능해지면 “새 퀴즈”를 다시 눌러 저장을 재시도할 수 있습니다.",
       legacyTitle: "이전 버전의 학습 데이터가 있습니다",
       legacyImport: "이 화면으로 가져오기",
       legacyResumeHint: "저장된 문제와 점수를 유지하여 이어서 풀 수 있습니다. 이전 데이터도 보존됩니다.",
@@ -2013,8 +2016,20 @@ function ensureSessionCanBeReplaced() {
     setView("result");
     renderResult();
     showToast(t("saveBeforeNewQuiz"));
+    return false;
   }
-  return allowed;
+  // Check after cloud queue writes, which can also attempt history persistence.
+  if (isCompleteSession(state.session) && state.session.historySavePending === true) {
+    const historySaved = saveCompletedSessionHistory(state.session);
+    saveHistoryRecoverySession();
+    if (!historySaved) {
+      setView("result");
+      renderResult();
+      showToast(t("historyBeforeNewQuiz"));
+      return false;
+    }
+  }
+  return true;
 }
 
 function clearStoredSession() {
@@ -2689,6 +2704,16 @@ function saveCompletedSessionHistory(session, summary = computeResultSummary(ses
   return session.savedToHistory;
 }
 
+function saveHistoryRecoverySession() {
+  // Never sacrifice the recovered history to persist its retry marker.
+  if (saveSession({ allowRecovery: false })) return true;
+  // Keep retrying if the durable session still says pending; later queue writes
+  // may otherwise discard the history while the in-memory flag says it is safe.
+  state.session.savedToHistory = false;
+  state.session.historySavePending = true;
+  return false;
+}
+
 function renderResult() {
   const session = state.session;
   if (!isCompleteSession(session)) {
@@ -2916,7 +2941,8 @@ function updateScoreRecord(entry) {
   const { payload, status, message } = entry;
   const sessionRecord = scoreRecordFromSession(state.session);
   if (!sessionRecord.scoreSaveId && sessionRecord.id) sessionRecord.scoreSaveId = `mobile-${sessionRecord.id}`;
-  if (state.session?.status === "complete" && matchesScoreRecord(payload, sessionRecord)) {
+  const matchesSession = state.session?.status === "complete" && matchesScoreRecord(payload, sessionRecord);
+  if (matchesSession) {
     Object.assign(state.session, {
       scoreSaveId: payload.saveId, scoreSyncRequestId: payload.requestId,
       scoreSyncStatus: status, scoreSyncMessage: message,
@@ -2930,7 +2956,12 @@ function updateScoreRecord(entry) {
   if (record) {
     record.scoreSaveId = payload.saveId;
     record.scoreSyncStatus = status;
-    saveHistory({ allowRecovery: status !== "saved" });
+    const saved = saveHistory({ allowRecovery: status !== "saved" });
+    if (saved && state.history.includes(record) && matchesSession && state.session.historySavePending === true) {
+      state.session.savedToHistory = true;
+      state.session.historySavePending = false;
+      saveHistoryRecoverySession();
+    }
   }
 }
 
@@ -2973,7 +3004,7 @@ function retryPendingScores(user) {
   loadPendingScoresFromStorage();
   if (isCompleteSession(state.session) && state.session.historySavePending === true) {
     saveCompletedSessionHistory(state.session);
-    saveSession();
+    saveHistoryRecoverySession();
   }
   state.outbox.forEach((entry) => {
     if ((user === undefined || entry.payload.user === user) && !bridgeQueue.has(entry.payload.requestId)) {
@@ -3416,7 +3447,8 @@ function renderProgress() {
       section.append(empty);
     }
     rows.forEach((row) => {
-      const label = row.key ? mode === "vocab" ? labelForPos(row.key) : row.key : t("uncategorized");
+      const label = !row.key || row.key === "unknown" ? t("uncategorized")
+        : mode === "vocab" ? labelForPos(row.key) : row.key;
       const children = mode === "vocab" ? row.levels : row.subtopics;
       if (children.length) {
         const details = document.createElement("details");
@@ -3425,7 +3457,8 @@ function renderProgress() {
         details.append(title);
         children.forEach((child) => {
           const childLabel = mode === "vocab"
-            ? formatProgressLevelLabel(child.key) : child.key || t("uncategorized");
+            ? formatProgressLevelLabel(child.key)
+            : !child.key || child.key === "unknown" ? t("uncategorized") : child.key;
           details.append(createProgressRow(child, childLabel));
         });
         section.append(details);
