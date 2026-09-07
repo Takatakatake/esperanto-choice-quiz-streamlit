@@ -1,11 +1,11 @@
-const CACHE_VERSION = "esperanto-mobile-pwa-2026-09-07-save-recovery-1";
+const CACHE_VERSION = "esperanto-mobile-pwa-2026-09-07-history-recovery-2";
 const APP_CACHE = `${CACHE_VERSION}:app`;
 const RUNTIME_CACHE = `${CACHE_VERSION}:runtime`;
 const RUNTIME_CACHE_MAX_ENTRIES = 400;
 
 const APP_SHELL = [
   "./mobile_app/index.html",
-  "./mobile_app/styles.css?v=2026-09-07-save-recovery-1",
+  "./mobile_app/styles.css?v=2026-09-07-history-recovery-2",
   "./mobile_app/app.js",
   "./mobile_app/quiz_core.mjs",
   "./mobile_app/quiz_questions.mjs",

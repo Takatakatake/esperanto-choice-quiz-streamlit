@@ -389,6 +389,15 @@ test("failed history writes recover on reload without duplicates or restoring cl
   expect(failed.history).toBeNull();
   await expect(page.locator("#saveStatus")).toContainText("保存できません");
 
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await page.locator("#newQuizButton").click();
+    await expect(page.locator("#resultView")).toHaveClass(/is-active/);
+    await expect(page.locator("#toast")).toContainText("端末の履歴に保存できていない");
+    const retained = await page.evaluate(() => JSON.parse(localStorage.getItem("esperanto-choice-mobile:session:v2")));
+    expect(retained.id).toBe(failed.session.id);
+    expect(retained.historySavePending).toBe(true);
+  }
+
   await page.reload({ waitUntil: "networkidle" });
   await expect(page.locator("#resultView")).toHaveClass(/is-active/);
   const recovered = await page.evaluate(() => ({

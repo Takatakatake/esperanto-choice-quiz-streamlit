@@ -642,6 +642,45 @@ test("saved results survive receipt storage failure and reload without another s
   expect(await page.evaluate(() => window.fixtureScoreRequests)).toEqual([]);
 });
 
+test("a later successful history write clears the failure indicator without reload", async ({ page }, testInfo) => {
+  test.setTimeout(60000);
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.addInitScript(() => {
+    const originalSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      // Completion fails locally; storage accepts the later acknowledged row.
+      if (key === "esperanto-choice-mobile:history:v2"
+          && JSON.parse(value).some((record) => record.scoreSyncStatus !== "saved")) {
+        throw new DOMException("Fixture history write failure before ACK", "SecurityError");
+      }
+      return originalSetItem.call(this, key, value);
+    };
+  });
+  await page.goto(localAppUrl(true), { waitUntil: "domcontentloaded" });
+  await expectLocalFixture(page);
+  const app = page.frameLocator("iframe[title*='esperanto_mobile_pwa']");
+  await expect(app.locator("#setupView")).toHaveClass(/is-active/, { timeout: 15000 });
+  await app.locator("#userName").fill(`history-recovery-${Date.now()}-${testInfo.workerIndex}`);
+  await app.locator("#spartanMode").uncheck();
+  await app.locator("#audioMode").selectOption("off");
+  await app.locator("#startButton").click();
+  await answerRemainingCorrectly(page, app);
+  await expect(app.locator("#syncScoreButton")).toHaveText("学習記録を保存済み", { timeout: 15000 });
+  await expect(app.locator("#saveStatus")).not.toContainText("保存できません");
+  const saved = await readSession(app);
+  expect(saved.savedToHistory).toBe(true);
+  expect(saved.historySavePending).toBe(false);
+  const history = await app.locator("body").evaluate(() => JSON.parse(localStorage.getItem("esperanto-choice-mobile:history:v2")));
+  expect(history).toHaveLength(1);
+  expect(history[0].id).toBe(saved.id);
+  expect(history[0].points).toBe(saved.finalPoints);
+  expect(history[0].scoreSyncStatus).toBe("saved");
+  await app.locator("#historyNav").click();
+  await expect(app.locator("#progressContent .progress-totals strong").first()).toHaveText(`${saved.finalPoints.toFixed(1)}点`, { timeout: 15000 });
+  expect(errors).toEqual([]);
+});
+
 test("fixture accounts show their own field totals while private accounts stay out of rankings", async ({ page }) => {
   await page.goto(localAppUrl(true), { waitUntil: "domcontentloaded" });
   await expectLocalFixture(page);
