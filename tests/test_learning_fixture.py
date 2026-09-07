@@ -1,7 +1,9 @@
 """Exercise the actual persistence/aggregation path without credentials or network."""
 
 import importlib.util
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -132,6 +134,141 @@ class LearningFixtureIntegrationTests(unittest.TestCase):
         self.assertEqual(rankings["source"], "stats_only")
         self.assertEqual(rankings["own"]["overall"]["points"], 200)
         self.assertIsNone(score_sync_service.load_score_records_for_totals(retries=1))
+
+    def test_overlapping_total_updates_preserve_the_new_score(self):
+        stats = self.store.sheets["UserStats"]
+        original_read = stats.get_all_values
+        original_upsert = score_append_utils.upsert_user_total
+        older_read = threading.Event()
+        newer_updating = threading.Event()
+        newer_finished = threading.Event()
+        older_thread = {}
+
+        def pause_older_snapshot():
+            values = original_read()
+            if threading.get_ident() == older_thread.get("id") and not older_read.is_set():
+                older_read.set()
+                self.assertTrue(newer_updating.wait(3))
+                # Without serialization the newer write finishes first and is
+                # then overwritten. With it, the newer writer waits for us.
+                newer_finished.wait(0.25)
+            return values
+
+        def older_update():
+            older_thread["id"] = threading.get_ident()
+            return original_upsert("UserStats", user=" Review-A ", total_points=200,
+                                   last_updated="older", retries=1)
+
+        def signal_newer_update(*args, **kwargs):
+            newer_updating.set()
+            return original_upsert(*args, **kwargs)
+
+        def save_new_score():
+            try:
+                return mobile_score_sync.save_mobile_score_request({
+                    "type": "save_score", "user": "Review-A", "saveId": "overlapping-new-score",
+                    "mode": "vocab", "pos": "noun", "points": 25, "total": 1,
+                })
+            finally:
+                newer_finished.set()
+
+        with patch.object(stats, "get_all_values", side_effect=pause_older_snapshot), \
+             patch.object(score_sync_service, "upsert_user_total", side_effect=signal_newer_update):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                older = pool.submit(older_update)
+                self.assertTrue(older_read.wait(3))
+                newer = pool.submit(save_new_score)
+                self.assertTrue(older.result(timeout=5))
+                self.assertTrue(newer.result(timeout=5)["ok"])
+
+        self.assertEqual(float(stats.get_all_values()[1][1]), 225)
+        with patch.object(self.store.sheets["Scores"], "get_all_values", side_effect=TimeoutError("Scores unavailable")):
+            rankings = mobile_ranking.load_mobile_rankings_request({"type": "load_rankings", "user": "Review-A"})
+        self.assertEqual(rankings["source"], "stats_only")
+        self.assertEqual(rankings["own"]["overall"]["points"], 225)
+
+    def _assert_independent_total_update(self, worksheet_name, user, points):
+        stats = self.store.sheets["UserStats"]
+        original_read = stats.get_all_values
+        older_read = threading.Event()
+        release_older = threading.Event()
+        older_thread = {}
+
+        def pause_older_snapshot():
+            values = original_read()
+            if threading.get_ident() == older_thread.get("id") and not older_read.is_set():
+                older_read.set()
+                self.assertTrue(release_older.wait(5))
+            return values
+
+        def older_update():
+            older_thread["id"] = threading.get_ident()
+            return score_append_utils.upsert_user_total("UserStats", user="Review-A", total_points=200,
+                                                       last_updated="older", retries=1)
+
+        with patch.object(stats, "get_all_values", side_effect=pause_older_snapshot):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                older = pool.submit(older_update)
+                try:
+                    self.assertTrue(older_read.wait(3))
+                    independent = pool.submit(score_append_utils.upsert_user_total, worksheet_name,
+                                              user=user, total_points=points, last_updated="newer", retries=1)
+                    self.assertTrue(independent.result(timeout=3))
+                finally:
+                    release_older.set()
+                self.assertTrue(older.result(timeout=3))
+        records = score_append_utils.load_sheet_records(worksheet_name)
+        self.assertEqual(float(next(row["total_points"] for row in records if row["user"] == user)), points)
+
+    def test_total_updates_for_other_accounts_can_finish_independently(self):
+        self._assert_independent_total_update("UserStats", "Review-B", 1_200_025)
+
+    def test_total_updates_for_other_sheets_can_finish_independently(self):
+        self._assert_independent_total_update("UserStatsSentence", "Review-A", 55)
+
+    def test_failed_total_write_does_not_block_the_next_request(self):
+        stats = self.store.sheets["UserStats"]
+        with patch.object(stats, "update", side_effect=TimeoutError("Synthetic write failure")):
+            self.assertFalse(score_append_utils.upsert_user_total(
+                "UserStats", user="Review-A", total_points=225, last_updated="failed", retries=1))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            retry = pool.submit(score_append_utils.upsert_user_total, "UserStats", user="Review-A",
+                                total_points=225, last_updated="confirmed", retries=1)
+            self.assertTrue(retry.result(timeout=3))
+        self.assertEqual(float(stats.get_all_values()[1][1]), 225)
+
+    def test_invalid_stats_headers_and_unavailable_scores_do_not_show_zero_rankings(self):
+        cases = (["user", "wrong_total"], ["wrong_user", "total_points"],
+                 ["user", "total_points", "total_points"], ["user", "user", "total_points"])
+        for headers in cases:
+            with self.subTest(headers=headers):
+                self.store.sheets["UserStats"] = fixture.MemoryWorksheet("UserStats", headers, [
+                    {"user": "Review-A", "wrong_user": "Review-A", "total_points": 200, "wrong_total": 200},
+                ])
+                with patch.object(self.store.sheets["Scores"], "get_all_values", side_effect=TimeoutError("Scores unavailable")):
+                    result = mobile_ranking.load_mobile_rankings_request({"type": "load_rankings", "user": "Review-A"})
+                self.assertFalse(result["ok"])
+                self.assertTrue(all(not rows for rows in result["rankings"].values()))
+                self.assertEqual(result["own"], {})
+
+    def test_invalid_stats_headers_still_allow_rankings_from_valid_scores(self):
+        self.store.sheets["UserStats"] = fixture.MemoryWorksheet("UserStats", ["user", "wrong_total"], [
+            {"user": "Review-A", "wrong_total": 200},
+        ])
+        result = mobile_ranking.load_mobile_rankings_request({"type": "load_rankings", "user": "Review-A"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source"], "scores_only")
+        self.assertEqual(result["own"]["overall"]["points"], 200)
+
+    def test_valid_zero_total_remains_visible_when_scores_are_unavailable(self):
+        self.store.sheets["UserStats"] = fixture.MemoryWorksheet("UserStats", ["user", "total_points"], [
+            {"user": "Review-A", "total_points": 0},
+        ])
+        with patch.object(self.store.sheets["Scores"], "get_all_values", side_effect=TimeoutError("Scores unavailable")):
+            result = mobile_ranking.load_mobile_rankings_request({"type": "load_rankings", "user": "Review-A"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source"], "stats_only")
+        self.assertEqual(result["own"]["overall"]["points"], 0)
 
     def test_legacy_stats_only_name_keeps_its_total_when_no_score_logs_exist(self):
         self.store.sheets["UserStats"].append_row(["Legacy", "70", "old"], value_input_option="RAW")
